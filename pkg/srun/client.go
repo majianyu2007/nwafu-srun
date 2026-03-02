@@ -233,6 +233,8 @@ func (c *Client) GetLoginInfo() {
 
 	req, _ := http.NewRequest("GET", u.String(), nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Referer", c.getHostLoginPageURL())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"nwafu-srun/pkg/srun"
 )
@@ -58,6 +59,7 @@ func main() {
 	// If force flag is provided, execute logout then login immediately, like login.py
 	if force {
 		client.LogOut()
+		time.Sleep(1500 * time.Millisecond) // Add a delay to ensure Srun backend processes the logout
 		client.LogIn()
 		return
 	}
