@@ -14,6 +14,7 @@ var (
 	username string
 	password string
 	force    bool
+	verbose  bool
 	help     bool
 )
 
@@ -24,12 +25,14 @@ func init() {
 	flag.StringVar(&password, "password", "", "Password")
 	flag.BoolVar(&force, "f", false, "Force login (logout then login directly without interactive menu, like login.py)")
 	flag.BoolVar(&force, "force", false, "Force login")
+	flag.BoolVar(&verbose, "v", false, "Verbose output (print request URLs and responses)")
+	flag.BoolVar(&verbose, "verbose", false, "Verbose output")
 	flag.BoolVar(&help, "h", false, "Help")
 	flag.BoolVar(&help, "help", false, "Help")
 }
 
 func guide(argv string) {
-	fmt.Printf("Usage:\n%s -u <username> -p <password> [-f]\n%s --username=<username> --password=<password> [--force]\n\n", argv, argv)
+	fmt.Printf("Usage:\n%s -u <username> -p <password> [-f] [-v]\n%s --username=<username> --password=<password> [--force] [--verbose]\n\n", argv, argv)
 }
 
 func formatCenter(s string, width int) string {
@@ -55,6 +58,7 @@ func main() {
 	}
 
 	client := srun.NewClient(username, password)
+	client.Verbose = verbose
 
 	// If force flag is provided, execute logout then login immediately, like login.py
 	if force {

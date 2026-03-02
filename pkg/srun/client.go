@@ -19,6 +19,7 @@ type Client struct {
 	Password string
 	IP       string
 	BaseURL  string
+	Verbose  bool
 
 	httpClient *http.Client
 }
@@ -79,6 +80,9 @@ func (c *Client) GetIP() (string, error) {
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.26 Safari/537.36")
 
+	if c.Verbose {
+		fmt.Printf("[Verbose] GET %s\n", c.getHostLoginPageURL())
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to get IP request: %v", err)
@@ -86,6 +90,13 @@ func (c *Client) GetIP() (string, error) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if c.Verbose {
+		printLen := len(body)
+		if printLen > 200 {
+			printLen = 200
+		}
+		fmt.Printf("[Verbose] Response (len=%d): %s...\n", len(body), string(body)[:printLen])
+	}
 	re := regexp.MustCompile(`ip\s*:\s*"(.*?)"`)
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) > 1 {
@@ -111,6 +122,9 @@ func (c *Client) GetChallenge() (string, error) {
 	req, _ := http.NewRequest("GET", u.String(), nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36")
 
+	if c.Verbose {
+		fmt.Printf("[Verbose] GET %s\n", u.String())
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch token: %v", err)
@@ -118,6 +132,9 @@ func (c *Client) GetChallenge() (string, error) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if c.Verbose {
+		fmt.Printf("[Verbose] Response (len=%d): %s\n", len(body), string(body))
+	}
 	re := regexp.MustCompile(`"challenge":"(.*?)"`)
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) > 1 {
@@ -189,16 +206,23 @@ func (c *Client) LogIn() {
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
+	if c.Verbose {
+		fmt.Printf("[Verbose] GET %s\n", u.String())
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		fmt.Println("-----------------------------------------")
 		fmt.Println("Failed to authenticate (connection error)")
+		fmt.Println(err)
 		fmt.Println("-----------------------------------------")
 		return
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if c.Verbose {
+		fmt.Printf("[Verbose] Response (len=%d): %s\n", len(body), string(body))
+	}
 	re := regexp.MustCompile(`"res":"(.*?)"`)
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) > 1 && matches[1] == "ok" {
@@ -239,6 +263,9 @@ func (c *Client) GetLoginInfo() {
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Referer", c.getHostLoginPageURL())
 
+	if c.Verbose {
+		fmt.Printf("[Verbose] GET %s\n", u.String())
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		fmt.Println("Failed to get authentication status (connection error)")
@@ -247,6 +274,9 @@ func (c *Client) GetLoginInfo() {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if c.Verbose {
+		fmt.Printf("[Verbose] Response (len=%d): %s\n", len(body), string(body))
+	}
 	strLoginInfo := string(body)
 
 	reErr := regexp.MustCompile(`"error":"(.*?)"`)
@@ -308,6 +338,9 @@ func (c *Client) LogOut() {
 	req, _ := http.NewRequest("GET", u.String(), nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36")
 
+	if c.Verbose {
+		fmt.Printf("[Verbose] GET %s\n", u.String())
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		fmt.Println("-----------------------------------------")
@@ -318,6 +351,9 @@ func (c *Client) LogOut() {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if c.Verbose {
+		fmt.Printf("[Verbose] Response (len=%d): %s\n", len(body), string(body))
+	}
 	re := regexp.MustCompile(`"res":"(.*?)"`)
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) > 1 && matches[1] == "ok" {
