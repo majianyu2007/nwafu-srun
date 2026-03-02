@@ -38,6 +38,27 @@
 * 注销功能因为深澜系统的问题，不能正常使用；
 * 刚认证之后无法正常获取用户信息；
 
+### 自动认证配置 (Linux / macOS crontab)
+
+如果您希望在路由器 (如 OpenWrt)、NAS 或 Linux 服务器上实现断网自动重连和定时重连，您可以使用 `crontab` 来定时执行此程序，并在执行时带上 `--force` 或 `-f` 标签。
+
+1. 打开终端，输入 `crontab -e` 以编辑当前用户的定时任务。
+2. 在文件末尾添加以下两行（请将 `/path/to/nwafu-srun` 替换为您实际存放该程序的绝对路径）：
+
+```cron
+# 开机时运行一次自动认证
+@reboot sleep 30 && /path/to/nwafu-srun -u your_username -p your_password -f >> /tmp/nwafu-srun.log 2>&1
+
+# 每天早上 6:00 定时运行自动认证
+0 6 * * * /path/to/nwafu-srun -u your_username -p your_password -f >> /tmp/nwafu-srun.log 2>&1
+```
+
+> **注意**：开机启动时（`@reboot`）建议加上 `sleep 30` 延时，确保网络接口和路由表已经初始化完毕后再执行认证程序。日志会输出到 `/tmp/nwafu-srun.log` 中以便日后排查问题。
+
+---
+
+*本项目基于 [Shenlan_NWAFU](https://github.com/Shenlan-NWAFU/Shenlan) 的算法重构，感谢原作者的研究。*
+
 ## 致谢
 
 [vincentimba/shenlan_xauat](https://github.com/vincentimba/shenlan_xauat): 项目灵感（其实是不想实现那个加密算法了）
