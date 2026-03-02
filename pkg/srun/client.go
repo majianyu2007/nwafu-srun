@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -28,6 +29,7 @@ func NewClient(username, password string) *Client {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
+	jar, _ := cookiejar.New(nil)
 	return &Client{
 		Username: username,
 		Password: password,
@@ -35,6 +37,7 @@ func NewClient(username, password string) *Client {
 		httpClient: &http.Client{
 			Transport: tr,
 			Timeout:   5 * time.Second,
+			Jar:       jar,
 		},
 	}
 }
