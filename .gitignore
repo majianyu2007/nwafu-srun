@@ -17,6 +17,11 @@ eggs/
 lib/
 lib64/
 parts/
+# Go binaries
+nwafu-srun.exe
+nwafu-srun-linux
+nwafu-srun-darwin
+nwafu-srun-darwin-arm64
 sdist/
 var/
 wheels/
