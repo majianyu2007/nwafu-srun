@@ -200,7 +200,8 @@ func (c *Client) LogIn() {
 	req.Header.Set("Accept", "text/javascript, application/javascript, application/ecmascript, application/x-ecmascript, */*; q=0.01")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6")
 	req.Header.Set("Connection", "keep-alive")
-	req.Header.Set("Cookie", "lang=zh-CN")
+	// Using req.AddCookie instead of Set to ensure we don't wipe cookiejar cookies if they exist
+	req.AddCookie(&http.Cookie{Name: "lang", Value: "zh-CN"})
 	req.Header.Set("Host", strings.TrimPrefix(strings.TrimPrefix(c.BaseURL, "https://"), "http://"))
 	req.Header.Set("Referer", c.getHostLoginPageURL())
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
@@ -226,6 +227,7 @@ func (c *Client) LogIn() {
 	re := regexp.MustCompile(`"res":"(.*?)"`)
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) > 1 && matches[1] == "ok" {
+		time.Sleep(1 * time.Second) // Delay to ensure Srun backend database applies online state
 		c.GetLoginInfo()
 	} else {
 		// Try to extract exact err_msg if available
