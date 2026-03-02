@@ -2,7 +2,6 @@ package srun
 
 import (
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,19 +124,7 @@ func (c *Client) GetChallenge() (string, error) {
 }
 
 func (c *Client) getInfoString(challenge string) string {
-	infoMap := map[string]string{
-		"username": c.Username,
-		"password": c.Password,
-		"ip":       c.IP,
-		"acid":     "1",
-		"enc_ver":  "srun_bx1",
-	}
-	b, _ := json.Marshal(infoMap)
-	// Replace " with ' and remove spaces like Python logic does
-	strInfo := string(b)
-	strInfo = strings.ReplaceAll(strInfo, "\"", "'")
-	strInfo = strings.ReplaceAll(strInfo, " ", "")
-
+	strInfo := fmt.Sprintf(`{"username":"%s","password":"%s","ip":"%s","acid":"1","enc_ver":"srun_bx1"}`, c.Username, c.Password, c.IP)
 	encoded := jsBase64(xencode(strInfo, challenge))
 	return "{SRBX1}" + encoded
 }
