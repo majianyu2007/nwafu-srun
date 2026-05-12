@@ -61,7 +61,7 @@
 
 ---
 
-*本项目基于 [Shenlan_NWAFU](https://github.com/Shenlan-NWAFU/Shenlan) 的算法重构，感谢原作者的研究。*
+*本项目基于 [dingyx99/nwafu-srun](https://github.com/dingyx99/nwafu-srun) 的算法重构，感谢原作者的研究。*
 
 ## 致谢
 
