@@ -23,7 +23,7 @@ func init() {
 	flag.StringVar(&username, "username", "", "Username")
 	flag.StringVar(&password, "p", "", "Password")
 	flag.StringVar(&password, "password", "", "Password")
-	flag.BoolVar(&force, "f", false, "Force login (logout then login directly without interactive menu, like login.py)")
+	flag.BoolVar(&force, "f", false, "Force login (logout then login directly without interactive menu)")
 	flag.BoolVar(&force, "force", false, "Force login")
 	flag.BoolVar(&verbose, "v", false, "Verbose output (print request URLs and responses)")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose output")
@@ -60,7 +60,7 @@ func main() {
 	client := srun.NewClient(username, password)
 	client.Verbose = verbose
 
-	// If force flag is provided, execute logout then login immediately, like login.py
+	// If force flag is provided, execute logout then login immediately
 	if force {
 		client.LogOut()
 		time.Sleep(3 * time.Second) // Add a delay to ensure Srun backend processes the logout
@@ -68,7 +68,7 @@ func main() {
 		return
 	}
 
-	// Interactive mode like main.py
+	// Interactive mode
 	var command string
 	for {
 		fmt.Printf("\n%s\n", formatCenter("NWAFU SRUN Authentication Utility", 28))
