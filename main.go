@@ -32,7 +32,17 @@ func init() {
 }
 
 func guide(argv string) {
-	fmt.Printf("Usage:\n%s -u <username> -p <password> [-f] [-v]\n%s --username=<username> --password=<password> [--force] [--verbose]\n\n", argv, argv)
+	fmt.Printf("Usage:\n")
+	fmt.Printf("  Interactive mode:\n")
+	fmt.Printf("    %s [-u <username>] [-p <password>] [-v]\n", argv)
+	fmt.Printf("  Force mode:\n")
+	fmt.Printf("    %s -u <username> -p <password> -f [-v]\n", argv)
+	fmt.Printf("\nOptions:\n")
+	fmt.Printf("  -u, --username  Username (optional in interactive mode)\n")
+	fmt.Printf("  -p, --password  Password (optional in interactive mode)\n")
+	fmt.Printf("  -f, --force     Force login (logout then login, requires -u and -p)\n")
+	fmt.Printf("  -v, --verbose   Verbose output\n")
+	fmt.Printf("  -h, --help      Show this help\n")
 }
 
 func formatCenter(s string, width int) string {
@@ -52,9 +62,20 @@ func main() {
 		os.Exit(0)
 	}
 
-	if username == "" || password == "" {
+	if force && (username == "" || password == "") {
+		fmt.Println("Error: -f/--force requires -u/--username and -p/--password")
 		guide(os.Args[0])
 		os.Exit(2)
+	}
+
+	// Interactive mode: prompt for credentials if not provided via flags
+	if !force && username == "" {
+		fmt.Print("Username: ")
+		fmt.Scanln(&username)
+	}
+	if !force && password == "" {
+		fmt.Print("Password: ")
+		fmt.Scanln(&password)
 	}
 
 	client := srun.NewClient(username, password)

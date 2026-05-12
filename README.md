@@ -2,29 +2,31 @@
 
 ![CodeQL](https://github.com/majianyu2007/nwafu-srun/workflows/CodeQL/badge.svg)
 
-原作者已经毕业了，因无法接触到后续的任何网络环境和参数变更，项目即日起停更，如遇使用上的问题，可 fork 后提 pr 进行修复，祝各位使用愉快～
-
-西北农林科技大学深澜认证工具，现已使用 Go 语言重写，提供跨平台独立可执行文件。
+西北农林科技大学深澜认证工具，使用 Go 语言编写，提供跨平台独立可执行文件。
 
 该工具提供了交互式登录、查询信息和注销功能。此外，通过 `--force` 参数，可以直接执行认证（适用于需要自动认证的脚本环境）。
 
 ## 编译与使用方法
 
-请先运行对应平台的编译脚本，或是自己使用 `go build` 编译（Windows 下可以运行 `build.bat`，Linux/macOS 下运行 `build.sh`）。
+请先运行对应平台的编译脚本（位于 `utils/` 目录下），或直接使用 `go build -o nwafu-srun main.go` 编译。
 
-编译成功后，将会生成 `nwafu-srun.exe`（或其它无后缀文件）。
+编译成功后，将会生成 `nwafu-srun`（Windows 下为 `nwafu-srun.exe`）。
 
 ## Usage
 
 ```bash
-# Interactive mode
+# Interactive mode (credentials optional, will prompt if not provided)
+./nwafu-srun
 ./nwafu-srun -u your_username -p your_password
 
 # Force login/logout mode (no interactive prompt, for script/cron use)
 ./nwafu-srun -u your_username -p your_password -f
 
-# Troubleshooting verbose mode (dumps out HTTP requests and responses)
+# Verbose mode (prints HTTP requests and responses)
 ./nwafu-srun -u your_username -p your_password -f -v
+
+# Show help
+./nwafu-srun -h
 ```
 
 ### Options

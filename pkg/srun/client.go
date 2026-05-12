@@ -250,8 +250,11 @@ func (c *Client) LogIn() {
 // GetLoginInfo gets current status and balance
 func (c *Client) GetLoginInfo() {
 	if c.IP == "" {
-		fmt.Println("Cannot get status: IP is not yet resolved. Try logging in first.")
-		return
+		_, err := c.GetIP()
+		if err != nil {
+			fmt.Println("Failed to get status:", err)
+			return
+		}
 	}
 
 	u, _ := url.Parse(c.getLoginInfoURL())
@@ -305,6 +308,7 @@ func (c *Client) GetLoginInfo() {
 		fmt.Println("\n-----------------------------------------")
 		fmt.Printf("%-20s-%20s\n", "Login successfully", "")
 		fmt.Printf("%-20s-%20s\n", "     User name", userName)
+		fmt.Printf("%-20s-%20s\n", "            IP", c.IP)
 		fmt.Printf("%-20s-%20s\n", "       Balance", balance)
 		fmt.Printf("%-20s-%20.2f\n", "       Used MB", usedMB)
 		fmt.Println("-----------------------------------------\n")
