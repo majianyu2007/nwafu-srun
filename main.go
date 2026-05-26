@@ -416,18 +416,19 @@ func interactiveRun(rt config.Runtime) {
 	client := newClient(rt)
 
 	for {
-		fmt.Printf("\n%s\n", formatCenter("NWAFU SRUN Authentication Utility", 28))
-		fmt.Printf("%s\n", strings.Repeat("-", 31))
-		fmt.Printf("%s-%s\n", formatCenter("1", 15), formatCenter("Login", 15))
-		fmt.Printf("%s-%s\n", formatCenter("2", 15), formatCenter("Force re-login", 15))
-		fmt.Printf("%s-%s\n", formatCenter("3", 15), formatCenter("Logout", 15))
-		fmt.Printf("%s-%s\n", formatCenter("4", 15), formatCenter("Status", 15))
-		fmt.Printf("%s-%s\n", formatCenter("5", 15), formatCenter("Bypass billing", 15))
-		fmt.Printf("%s-%s\n", formatCenter("6", 15), formatCenter("Settings", 15))
-		fmt.Printf("%s-%s\n", formatCenter("7", 15), formatCenter("Exit", 15))
-		fmt.Printf("%s\n\n", strings.Repeat("-", 31))
+		fmt.Println("\n┌────────────────────────────────────────────┐")
+		fmt.Println("│      NWAFU SRUN Authentication Utility    │")
+		fmt.Println("├────────────────────────────────────────────┤")
+		fmt.Println("│  1) Login                                 │")
+		fmt.Println("│  2) Force re-login                        │")
+		fmt.Println("│  3) Logout                                │")
+		fmt.Println("│  4) Status                                │")
+		fmt.Println("│  5) Bypass billing                        │")
+		fmt.Println("│  6) Settings                              │")
+		fmt.Println("│  7) Exit                                  │")
+		fmt.Println("└────────────────────────────────────────────┘")
 
-		command, err := readLine("")
+		command, err := readLine("Select an option [1-7]: ")
 		if err != nil {
 			fail(exitUsage, "%v", err)
 		}
@@ -483,7 +484,7 @@ func interactiveRun(rt config.Runtime) {
 		case "7":
 			os.Exit(exitOK)
 		default:
-			fmt.Printf("\n%s\n", formatCenter("Input error!", 28))
+			fmt.Println("Invalid input. Please enter a number between 1 and 7.")
 		}
 	}
 }
