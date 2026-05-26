@@ -3,6 +3,7 @@ package srun
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -80,5 +81,15 @@ func TestFormatLoginInfo(t *testing.T) {
 	s := FormatLoginInfo(&LoginInfo{Username: "u", IP: "1.2.3.4", Balance: "1", UsedMB: 2.5, MAC: "aa:bb:cc:dd:ee:ff"})
 	if s == "" || len(s) < 20 {
 		t.Fatalf("format too short: %q", s)
+	}
+}
+
+func TestFormatStatusInfo(t *testing.T) {
+	s := FormatStatusInfo(&LoginInfo{Username: "u", IP: "1.2.3.4", Balance: "1", UsedMB: 2.5})
+	if s == "" || len(s) < 20 {
+		t.Fatalf("format too short: %q", s)
+	}
+	if !strings.Contains(s, "Current online status") {
+		t.Fatalf("unexpected status title: %q", s)
 	}
 }

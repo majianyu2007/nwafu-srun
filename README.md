@@ -19,6 +19,19 @@ go build -o nwafu-srun .
 ./nwafu-srun -u USER -p PASS --save-config
 ```
 
+## 快速开始
+
+```bash
+# 1) 编译
+go build -o nwafu-srun .
+
+# 2) 直接登录
+./nwafu-srun -u USER -p PASS
+
+# 3) 保存配置并启用自动认证（交互菜单中也可设置）
+./nwafu-srun -u USER -p PASS --save-config
+```
+
 ## 编译
 
 ```bash
@@ -60,8 +73,8 @@ go build -o utils/bypass/bypass ./utils/bypass
 | 6 | 设置（保存配置、auto-auth、查看/删除配置等） |
 | 7 | 退出 |
 
-登录成功后可选择将凭据保存至配置文件。
-如需永久关闭"是否保存凭据"的提示，可在提示中输入 `never`（设置菜单可恢复）。
+登录成功后可选择将凭据保存为配置文件。
+如果你不希望每次都看到“是否保存凭据”的提示，可在提示中输入 `never` 永久关闭（设置菜单可恢复）。
 
 ### 自动认证
 

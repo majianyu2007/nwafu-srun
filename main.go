@@ -466,7 +466,7 @@ func interactiveRun(rt config.Runtime) {
 				printErr(err)
 				continue
 			}
-			fmt.Print(srun.FormatLoginInfo(info))
+			fmt.Print(srun.FormatStatusInfo(info))
 		case "5":
 			if client.MAC == "" {
 				if info, err := client.GetLoginInfo(); err == nil {
