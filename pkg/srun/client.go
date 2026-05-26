@@ -318,6 +318,16 @@ func (c *Client) LogIn() (*LoginInfo, error) {
 			}
 			return nil, infoErr
 		}
+		if errors.Is(lastErr, ErrNotOnline) {
+			// Some gateways return transient "not_online_error" immediately after
+			// reporting login success. Treat login as successful and return a
+			// minimal info block so interactive UX remains consistent.
+			return &LoginInfo{
+				Username: c.Username,
+				IP:       c.IP,
+				Balance:  "0.00",
+			}, nil
+		}
 		return nil, lastErr
 	}
 
