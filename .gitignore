@@ -18,10 +18,13 @@ lib/
 lib64/
 parts/
 # Go binaries
+nwafu-srun
 nwafu-srun.exe
 nwafu-srun-linux
 nwafu-srun-darwin
 nwafu-srun-darwin-arm64
+utils/bypass/bypass
+utils/bypass/bypass.exe
 sdist/
 var/
 wheels/

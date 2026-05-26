@@ -1,47 +1,69 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for working on this repository.
 
 ## Overview
 
-A Go CLI tool for Srun (深澜) campus network authentication at Northwest A&F University. It logs in, logs out, and queries account status via the Srun portal API.
+Go CLI for Srun (深澜) campus network auth at NWAFU: login, logout, status, bypass billing, and optional **config-file auto-auth**.
 
-## Build & Run
+## Build
 
 ```bash
-go build -o nwafu-srun main.go     # local platform
-./build.sh                          # cross-compile linux/darwin/windows
-./build.bat                         # same, for Windows
+go build -o nwafu-srun .
+go build -o utils/bypass/bypass ./utils/bypass
+go test ./...
 ```
 
-No external dependencies — the Go module uses only standard library packages.
+Deps: `golang.org/x/term`.
 
 ## Architecture
 
 ```
-main.go                 # CLI: flag parsing (-u/-p/-f/-v), interactive menu loop
+main.go                    # CLI, interactive menu, config merge, auto-auth
+utils/bypass/main.go       # Standalone bypass (reads config username)
+pkg/config/                # JSON config in user config dir only
 pkg/srun/
-  client.go             # HTTP client for the Srun portal API (login/logout/status)
-  crypto.go             # Custom Srun encryption: XTEA variant + custom Base64 + HMAC-MD5 + SHA1
+  const.go, logger.go, http_util.go
+  client.go                # Portal API
+  crypto.go
+  selfservice.go           # SSO, sessions, RunBypass
+  errors.go                # Sentinel errors + Hint()
 ```
 
-**Authentication flow** (4 steps, all in `client.go`):
-1. `GetIP()` — fetches the login page, extracts the client IP from embedded JS
-2. `GetChallenge()` — gets an auth challenge token from `/cgi-bin/get_challenge`
-3. `LogIn()` — sends encrypted credentials to `/cgi-bin/srun_portal`, then calls `GetLoginInfo()` on success
-4. `GetLoginInfo()` — queries `/cgi-bin/rad_user_info` for account status/balance/usage
+## Configuration
 
-**Fallback behavior**: `probeAndSetBaseURL()` tests DNS resolution of `portal.nwafu.edu.cn` and falls back to IP `172.26.8.11` (HTTP, TLS verification disabled) when DNS is unreachable due to being offline.
+- Config path: `os.UserConfigDir()/nwafu-srun/config.json` (override with `--config`)
+- Merge priority: **CLI > env > file**
+- Non-interactive when: explicit `-u/-p`, `auto_auth` in config, or `-f`/`-b` with saved creds
+- Passwords stored **plaintext**, mode `0600`, Windows hidden attribute on config file
+- Flags: `--no-config`, `--save-config`
 
-**Cookie persistence**: Uses `net/http/cookiejar` so `JSESSIONID` from the initial GET is automatically included in subsequent requests, matching browser behavior.
+## Interactive menu
 
-**Two operational modes**:
-- Interactive (default): menu loop with login/logout/status/exit choices
-- Force mode (`-f`): logout then login without prompting, suitable for cron/scripts
+1 Login (online check) · 2 Force re-login · 3 Logout · 4 Status · 5 Bypass · 6 Settings · 7 Exit
 
-**Verbose mode (`-v`)**: prints request URLs and response bodies (truncated at 200 chars for the login page) for debugging.
+After successful login: optional save prompt (y / n / Never).
 
-## Known issues
+## Errors
 
-- Logout may not work due to upstream Srun system issues
-- Account info may not be available immediately after login
+Use `errors.Is` with sentinels in `errors.go`. Print `srun.Hint(err)` for user remediation.
+
+## CLI (main)
+
+| Flag | Description |
+|------|-------------|
+| `-u`, `-p` | Credentials |
+| `-f` | Pre-login logout |
+| `-b` | Post-login bypass |
+| `-a` | Kick all devices on bypass |
+| `--config`, `--no-config`, `--save-config` | Config file control |
+
+Env: `NWAFU_SRUN_USERNAME`, `NWAFU_SRUN_PASSWORD`.
+
+## Bypass tool
+
+`utils/bypass`: `-u`, `--login`, `-a`, reads config if `-u` omitted.
+
+## Exit codes
+
+0 OK · 1 runtime · 2 usage/config

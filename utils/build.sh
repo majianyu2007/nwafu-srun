@@ -18,5 +18,6 @@ case "$OS" in
 esac
 
 echo "Building nwafu-srun for ${OS}/${ARCH}..."
-go build -o "$BINARY" main.go
-echo "Done: $BINARY"
+go build -o "$BINARY" .
+go build -o "utils/bypass/bypass-${OS}-${ARCH}" ./utils/bypass
+echo "Done: $BINARY, utils/bypass/bypass-${OS}-${ARCH}"

@@ -1,9 +1,12 @@
 package srun
 
 import (
-	"crypto/tls"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -13,49 +16,100 @@ import (
 	"time"
 )
 
-// Client handles communication with the Srun authentication portal
+// LoginInfo holds parsed portal user status.
+type LoginInfo struct {
+	Username string
+	Balance  string
+	UsedMB   float64
+	MAC      string
+	IP       string
+}
+
+// Client handles communication with the Srun authentication portal.
 type Client struct {
 	Username string
 	Password string
 	IP       string
+	MAC      string
+	AcID     string
 	BaseURL  string
-	Verbose  bool
 
+	log        Logger
 	httpClient *http.Client
 }
 
-// NewClient creates a new Srun Client instance
-func NewClient(username, password string) *Client {
-	// Custom transport to ignore TLS certificate errors when using fallback IP
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
+// NewClient creates a new Srun Client instance.
+func NewClient(username, password, acid string) *Client {
 	jar, _ := cookiejar.New(nil)
 	return &Client{
-		Username: username,
-		Password: password,
-		BaseURL:  "https://portal.nwafu.edu.cn",
-		httpClient: &http.Client{
-			Transport: tr,
-			Timeout:   5 * time.Second,
-			Jar:       jar,
-		},
+		Username:   username,
+		Password:   password,
+		AcID:       acid,
+		BaseURL:    PortalDomain,
+		log:        NopLogger{},
+		httpClient: newPortalHTTPClient(jar),
 	}
 }
 
-// probeAndSetBaseURL checks if domain works, otherwise falls back to IP
-func (c *Client) probeAndSetBaseURL() error {
-	testURL := "https://portal.nwafu.edu.cn/srun_portal_pc?ac_id=1&theme=pro"
-	_, err := c.httpClient.Get(testURL)
-	if err != nil {
-		fmt.Println("Warning: Could not connect to portal.nwafu.edu.cn, falling back to 172.26.8.11...")
-		c.BaseURL = "http://172.26.8.11"
+// SetLogger sets the diagnostic logger for this client.
+func (c *Client) SetLogger(l Logger) {
+	if l == nil {
+		c.log = NopLogger{}
+		return
 	}
-	return nil
+	c.log = l
+}
+
+// SetVerbose enables or disables verbose logging via stderr.
+func (c *Client) SetVerbose(verbose bool) {
+	c.log = NewVerboseLogger(verbose, "Portal")
+}
+
+func (c *Client) ctx() context.Context {
+	return context.Background()
+}
+
+// resolveBaseURL tries three-layer DNS fallback for a portal host.
+func resolveBaseURL(domainURL, fallbackIP, testPath, fallbackScheme string) string {
+	probe := newProbeClient()
+	testURL := domainURL + testPath
+	if probeURL(probe, testURL) {
+		return domainURL
+	}
+
+	host := strings.TrimPrefix(strings.TrimPrefix(domainURL, "https://"), "http://")
+	for _, dns := range CampusDNSServers() {
+		r := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: DNSTimeout}
+				return d.DialContext(ctx, "udp", dns+":53")
+			},
+		}
+		ips, err := r.LookupHost(context.Background(), host)
+		if err != nil {
+			continue
+		}
+		for _, ip := range ips {
+			ipTest := fallbackScheme + "://" + ip + testPath
+			if probeURL(probe, ipTest) {
+				return fallbackScheme + "://" + ip
+			}
+		}
+	}
+
+	return fallbackScheme + "://" + fallbackIP
+}
+
+func (c *Client) probeAndSetBaseURL() {
+	if c.BaseURL != "" && c.BaseURL != PortalDomain {
+		return
+	}
+	c.BaseURL = resolveBaseURL(PortalDomain, PortalFallback, "/srun_portal_pc?ac_id="+c.AcID+"&theme=pro", "http")
 }
 
 func (c *Client) getHostLoginPageURL() string {
-	return c.BaseURL + "/srun_portal_pc?ac_id=1&theme=pro"
+	return c.BaseURL + "/srun_portal_pc?ac_id=" + c.AcID + "&theme=pro"
 }
 
 func (c *Client) getChallengeURL() string {
@@ -70,310 +124,378 @@ func (c *Client) getLoginInfoURL() string {
 	return c.BaseURL + "/cgi-bin/rad_user_info"
 }
 
-// GetIP fetches the current client IP from the portal
+func (c *Client) portalHost() string {
+	return strings.TrimPrefix(strings.TrimPrefix(c.BaseURL, "https://"), "http://")
+}
+
+// GetIP fetches the current client IP from the portal login page.
 func (c *Client) GetIP() (string, error) {
 	c.probeAndSetBaseURL()
 
-	req, err := http.NewRequest("GET", c.getHostLoginPageURL(), nil)
+	req, err := http.NewRequestWithContext(c.ctx(), http.MethodGet, c.getHostLoginPageURL(), nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.26 Safari/537.36")
+	req.Header.Set("User-Agent", DefaultUserAgent)
 
-	if c.Verbose {
-		fmt.Printf("[Verbose] GET %s\n", c.getHostLoginPageURL())
-	}
+	c.log.Debugf("GET %s", c.getHostLoginPageURL())
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to get IP request: %v", err)
+		return "", wrapPortalErr(err, "get IP")
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if c.Verbose {
-		printLen := len(body)
-		if printLen > 200 {
-			printLen = 200
-		}
-		fmt.Printf("[Verbose] Response (len=%d): %s...\n", len(body), string(body)[:printLen])
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read login page: %w", err)
 	}
+	c.log.Debugf("login page response len=%d", len(body))
+
 	re := regexp.MustCompile(`ip\s*:\s*"(.*?)"`)
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) > 1 {
-		ip := matches[1]
-		fmt.Printf("Your IP address: <%s>\n", ip)
-		c.IP = ip
-		return ip, nil
+		c.IP = matches[1]
+		return c.IP, nil
 	}
-	return "", fmt.Errorf("failed to get your IP address, please check your connection")
+	return "", fmt.Errorf("%w: IP not found on login page", ErrPortalUnreachable)
 }
 
-// GetChallenge gets the authentication token challenge
+// GetChallenge gets the authentication token challenge.
 func (c *Client) GetChallenge() (string, error) {
-	u, _ := url.Parse(c.getChallengeURL())
+	u, err := url.Parse(c.getChallengeURL())
+	if err != nil {
+		return "", err
+	}
 	q := u.Query()
-	nowMs := strconv.FormatInt(time.Now().UnixNano()/1000000, 10)
+	nowMs := strconv.FormatInt(time.Now().UnixNano()/1e6, 10)
 	q.Set("callback", "jQuery11277455887669735664_"+nowMs)
 	q.Set("username", c.Username)
 	q.Set("ip", c.IP)
 	q.Set("_", nowMs)
 	u.RawQuery = q.Encode()
 
-	req, _ := http.NewRequest("GET", u.String(), nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36")
-
-	if c.Verbose {
-		fmt.Printf("[Verbose] GET %s\n", u.String())
+	req, err := http.NewRequestWithContext(c.ctx(), http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", err
 	}
+	req.Header.Set("User-Agent", DefaultUserAgent)
+
+	c.log.Debugf("GET %s", u.String())
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch token: %v", err)
+		return "", wrapPortalErr(err, "get challenge")
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if c.Verbose {
-		fmt.Printf("[Verbose] Response (len=%d): %s\n", len(body), string(body))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read challenge: %w", err)
 	}
+	c.log.Debugf("challenge response: %s", string(body))
+
 	re := regexp.MustCompile(`"challenge":"(.*?)"`)
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) > 1 {
 		return matches[1], nil
 	}
-	return "", fmt.Errorf("failed to fetch token, please check your connection")
+	return "", fmt.Errorf("%w: challenge token not in response", ErrPortalUnreachable)
 }
 
-func (c *Client) getInfoString(challenge string) string {
-	strInfo := fmt.Sprintf(`{"username":"%s","password":"%s","ip":"%s","acid":"1","enc_ver":"srun_bx1"}`, c.Username, c.Password, c.IP)
-	encoded := jsBase64(xencode(strInfo, challenge))
-	return "{SRBX1}" + encoded
+type loginInfoPayload struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	IP       string `json:"ip"`
+	AcID     string `json:"acid"`
+	EncVer   string `json:"enc_ver"`
+}
+
+func (c *Client) getInfoString(challenge string) (string, error) {
+	payload := loginInfoPayload{
+		Username: c.Username,
+		Password: c.Password,
+		IP:       c.IP,
+		AcID:     c.AcID,
+		EncVer:   "srun_bx1",
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	encoded := jsBase64(xencode(string(b), challenge))
+	return "{SRBX1}" + encoded, nil
 }
 
 func (c *Client) chksumAdd(challenge, md5Info, info string) string {
 	str := challenge + c.Username
 	str += challenge + md5Info
-	str += challenge + "1" // acid
+	str += challenge + c.AcID
 	str += challenge + c.IP
-	str += challenge + "200" // n
-	str += challenge + "1"   // vtype
+	str += challenge + "200"
+	str += challenge + "1"
 	str += challenge + info
 	return str
 }
 
-// LogIn attempts to login
-func (c *Client) LogIn() {
+// LogIn attempts portal login and refreshes login info on success.
+func (c *Client) LogIn() (*LoginInfo, error) {
 	if c.IP == "" {
-		_, err := c.GetIP()
-		if err != nil {
-			fmt.Println(err)
-			return
+		if _, err := c.GetIP(); err != nil {
+			return nil, err
 		}
 	}
 
 	challenge, err := c.GetChallenge()
 	if err != nil {
-		fmt.Println(err)
-		return
+		return nil, err
 	}
 
-	md5Info := GetMD5(c.Password, challenge)
+	md5Info := HMACMD5Hex(c.Password, challenge)
 	md5Str := "{MD5}" + md5Info
-	infoStr := c.getInfoString(challenge)
-	chksumStr := GetSha1(c.chksumAdd(challenge, md5Info, infoStr))
+	infoStr, err := c.getInfoString(challenge)
+	if err != nil {
+		return nil, err
+	}
+	chksumStr := SHA1Hex(c.chksumAdd(challenge, md5Info, infoStr))
 
-	u, _ := url.Parse(c.getLogInURL())
+	u, err := url.Parse(c.getLogInURL())
+	if err != nil {
+		return nil, err
+	}
 	q := u.Query()
 	q.Set("callback", "jQuery1124064")
 	q.Set("action", "login")
 	q.Set("username", c.Username)
 	q.Set("password", md5Str)
-	q.Set("ac_id", "1")
+	q.Set("ac_id", c.AcID)
 	q.Set("ip", c.IP)
 	q.Set("info", infoStr)
 	q.Set("chksum", chksumStr)
 	q.Set("n", "200")
 	q.Set("type", "1")
-	q.Set("_", strconv.FormatInt(time.Now().UnixNano()/1000000, 10))
+	q.Set("_", strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
 	u.RawQuery = q.Encode()
 
-	req, _ := http.NewRequest("GET", u.String(), nil)
+	req, err := http.NewRequestWithContext(c.ctx(), http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Accept", "text/javascript, application/javascript, application/ecmascript, application/x-ecmascript, */*; q=0.01")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	req.Header.Set("Connection", "keep-alive")
-	// Using req.AddCookie instead of Set to ensure we don't wipe cookiejar cookies if they exist
 	req.AddCookie(&http.Cookie{Name: "lang", Value: "zh-CN"})
-	req.Header.Set("Host", strings.TrimPrefix(strings.TrimPrefix(c.BaseURL, "https://"), "http://"))
+	req.Header.Set("Host", c.portalHost())
 	req.Header.Set("Referer", c.getHostLoginPageURL())
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", DefaultUserAgent)
 
-	if c.Verbose {
-		fmt.Printf("[Verbose] GET %s\n", u.String())
-	}
+	c.log.Debugf("GET %s", u.String())
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		fmt.Println("-----------------------------------------")
-		fmt.Println("Failed to authenticate (connection error)")
-		fmt.Println(err)
-		fmt.Println("-----------------------------------------")
-		return
+		return nil, wrapPortalErr(err, "login")
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if c.Verbose {
-		fmt.Printf("[Verbose] Response (len=%d): %s\n", len(body), string(body))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read login response: %w", err)
 	}
+	c.log.Debugf("login response: %s", string(body))
+
 	re := regexp.MustCompile(`"res":"(.*?)"`)
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) > 1 && matches[1] == "ok" {
-		time.Sleep(1 * time.Second) // Delay to ensure Srun backend database applies online state
-		c.GetLoginInfo()
-	} else {
-		// Try to extract exact err_msg if available
-		reErr := regexp.MustCompile(`"error_msg":"(.*?)"`)
-		errMatches := reErr.FindStringSubmatch(string(body))
-		errMsg := "unknown error"
-		if len(errMatches) > 1 {
-			errMsg = errMatches[1]
-		}
-		if len(matches) > 1 {
-			errMsg = matches[1]
-		}
-		fmt.Println("-----------------------------------------")
-		fmt.Printf("          Failed to authenticate         \n")
-		fmt.Printf("          %s\n", errMsg)
-		fmt.Println("-----------------------------------------")
+		sleep(LoginSettleDelay)
+		info, err := c.GetLoginInfo()
+		return info, err
 	}
+
+	errMsg := parsePortalError(string(body), matches)
+	return nil, fmt.Errorf("%w: %s", ErrAuthFailed, errMsg)
 }
 
-// GetLoginInfo gets current status and balance
-func (c *Client) GetLoginInfo() {
+func parsePortalError(body string, resMatches []string) string {
+	reErr := regexp.MustCompile(`"error_msg":"(.*?)"`)
+	if m := reErr.FindStringSubmatch(body); len(m) > 1 {
+		return m[1]
+	}
+	if len(resMatches) > 1 {
+		return resMatches[1]
+	}
+	return "unknown error"
+}
+
+// GetLoginInfo queries current online status and populates Client fields.
+func (c *Client) GetLoginInfo() (*LoginInfo, error) {
 	if c.IP == "" {
-		_, err := c.GetIP()
-		if err != nil {
-			fmt.Println("Failed to get status:", err)
-			return
+		if _, err := c.GetIP(); err != nil {
+			return nil, err
 		}
 	}
 
-	u, _ := url.Parse(c.getLoginInfoURL())
+	u, err := url.Parse(c.getLoginInfoURL())
+	if err != nil {
+		return nil, err
+	}
 	q := u.Query()
 	q.Set("callback", "jQuery112402812915")
 	q.Set("_", strconv.FormatInt(time.Now().Unix(), 10))
 	u.RawQuery = q.Encode()
 
-	req, _ := http.NewRequest("GET", u.String(), nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36")
+	req, err := http.NewRequestWithContext(c.ctx(), http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", DefaultUserAgent)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Referer", c.getHostLoginPageURL())
 
-	if c.Verbose {
-		fmt.Printf("[Verbose] GET %s\n", u.String())
-	}
+	c.log.Debugf("GET %s", u.String())
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		fmt.Println("Failed to get authentication status (connection error)")
-		return
+		return nil, wrapPortalErr(err, "get status")
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if c.Verbose {
-		fmt.Printf("[Verbose] Response (len=%d): %s\n", len(body), string(body))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read status response: %w", err)
 	}
-	strLoginInfo := string(body)
+	c.log.Debugf("status response: %s", string(body))
 
+	info, err := parseLoginInfo(string(body), c.IP)
+	if err != nil {
+		return nil, err
+	}
+	if info.MAC != "" {
+		c.MAC = info.MAC
+	}
+	return info, nil
+}
+
+func parseLoginInfo(strLoginInfo, ip string) (*LoginInfo, error) {
 	reErr := regexp.MustCompile(`"error":"(.*?)"`)
 	errMatch := reErr.FindStringSubmatch(strLoginInfo)
-	if len(errMatch) > 1 && errMatch[1] == "ok" {
-		reUser := regexp.MustCompile(`"user_name":"(([a-zA-Z]|[0-9])*)"`)
-		reBalance := regexp.MustCompile(`"user_balance":(.*?),`)
-		reSumBytes := regexp.MustCompile(`"sum_bytes":(\d+),`)
-
-		userName := "Unknown"
-		if m := reUser.FindStringSubmatch(strLoginInfo); len(m) > 1 {
-			userName = m[1]
-		}
-		balance := "0.00"
-		if m := reBalance.FindStringSubmatch(strLoginInfo); len(m) > 1 {
-			balance = m[1]
-		}
-		usedMB := 0.0
-		if m := reSumBytes.FindStringSubmatch(strLoginInfo); len(m) > 1 {
-			bytesVal, _ := strconv.ParseFloat(m[1], 64)
-			usedMB = bytesVal / 1000000.0
-		}
-
-		fmt.Println("\n-----------------------------------------")
-		fmt.Printf("%-20s-%20s\n", "Login successfully", "")
-		fmt.Printf("%-20s-%20s\n", "     User name", userName)
-		fmt.Printf("%-20s-%20s\n", "            IP", c.IP)
-		fmt.Printf("%-20s-%20s\n", "       Balance", balance)
-		fmt.Printf("%-20s-%20.2f\n", "       Used MB", usedMB)
-		fmt.Println("-----------------------------------------\n")
-	} else {
+	if len(errMatch) < 2 || errMatch[1] != "ok" {
 		errInfo := "unknown"
 		if len(errMatch) > 1 {
 			errInfo = errMatch[1]
 		}
-		fmt.Printf("Failed to get authentication status: <%s>\n", errInfo)
+		return nil, fmt.Errorf("%w: %s", ErrNotOnline, errInfo)
 	}
+
+	reUser := regexp.MustCompile(`"user_name":"(([a-zA-Z]|[0-9])*)"`)
+	reBalance := regexp.MustCompile(`"user_balance":(.*?),`)
+	reSumBytes := regexp.MustCompile(`"sum_bytes":(\d+),`)
+	reMAC := regexp.MustCompile(`"user_mac":"(([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})"`)
+
+	info := &LoginInfo{IP: ip, Balance: "0.00"}
+	if m := reUser.FindStringSubmatch(strLoginInfo); len(m) > 1 {
+		info.Username = m[1]
+	}
+	if m := reBalance.FindStringSubmatch(strLoginInfo); len(m) > 1 {
+		info.Balance = m[1]
+	}
+	if m := reSumBytes.FindStringSubmatch(strLoginInfo); len(m) > 1 {
+		bytesVal, _ := strconv.ParseFloat(m[1], 64)
+		info.UsedMB = bytesVal / 1_000_000.0
+	}
+	if m := reMAC.FindStringSubmatch(strLoginInfo); len(m) > 1 {
+		info.MAC = m[1]
+	}
+	return info, nil
 }
 
-// LogOut attempts to log out
-func (c *Client) LogOut() {
+// FormatLoginInfo returns a human-readable status block.
+func FormatLoginInfo(info *LoginInfo) string {
+	if info == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n-----------------------------------------\n")
+	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "Login successfully", ""))
+	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "     User name", info.Username))
+	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "            IP", info.IP))
+	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "       Balance", info.Balance))
+	b.WriteString(fmt.Sprintf("%-20s-%20.2f\n", "       Used MB", info.UsedMB))
+	if info.MAC != "" {
+		b.WriteString(fmt.Sprintf("%-20s-%20s\n", "           MAC", info.MAC))
+	}
+	b.WriteString("-----------------------------------------\n")
+	return b.String()
+}
+
+// LogOut attempts portal logout, falling back to self-service kick.
+func (c *Client) LogOut() error {
+	return c.logOutInternal(false)
+}
+
+// QuietLogOut attempts logout without printing; errors are returned.
+func (c *Client) QuietLogOut() error {
+	return c.logOutInternal(true)
+}
+
+func (c *Client) logOutInternal(quiet bool) error {
 	if c.IP == "" {
-		_, err := c.GetIP()
-		if err != nil {
-			fmt.Println(err)
-			return
+		if _, err := c.GetIP(); err != nil {
+			return err
 		}
 	}
 
-	u, _ := url.Parse(c.getLogInURL())
+	u, err := url.Parse(c.getLogInURL())
+	if err != nil {
+		return err
+	}
 	q := u.Query()
 	q.Set("callback", "jQuery11240579338170130")
 	q.Set("action", "logout")
-	q.Set("ac_id", "1")
+	q.Set("ac_id", c.AcID)
 	q.Set("ip", c.IP)
 	q.Set("username", c.Username)
-	q.Set("_", strconv.FormatInt(time.Now().UnixNano()/1000000, 10))
+	q.Set("_", strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
 	u.RawQuery = q.Encode()
 
-	req, _ := http.NewRequest("GET", u.String(), nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36")
-
-	if c.Verbose {
-		fmt.Printf("[Verbose] GET %s\n", u.String())
+	req, err := http.NewRequestWithContext(c.ctx(), http.MethodGet, u.String(), nil)
+	if err != nil {
+		return err
 	}
+	req.Header.Set("User-Agent", DefaultUserAgent)
+
+	c.log.Debugf("GET %s", u.String())
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		fmt.Println("-----------------------------------------")
-		fmt.Println("Fail to logout (connection error)")
-		fmt.Println("-----------------------------------------")
-		return
+		return wrapPortalErr(err, "logout")
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if c.Verbose {
-		fmt.Printf("[Verbose] Response (len=%d): %s\n", len(body), string(body))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read logout response: %w", err)
 	}
+	c.log.Debugf("logout response: %s", string(body))
+
 	re := regexp.MustCompile(`"res":"(.*?)"`)
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) > 1 && matches[1] == "ok" {
-		fmt.Println("-----------------------------------------")
-		fmt.Println("           Logout successfully           ")
-		fmt.Println("-----------------------------------------")
-	} else {
-		errMsg := "unknown"
-		if len(matches) > 1 {
-			errMsg = matches[1]
-		}
-		fmt.Println("-----------------------------------------")
-		fmt.Println("             Fail to logout              ")
-		fmt.Printf("             %s\n", errMsg)
-		fmt.Println("-----------------------------------------")
+		return nil
 	}
+
+	if quiet {
+		return errors.New("portal logout failed")
+	}
+
+	// Portal logout often fails; try self-service kick as fallback.
+	c.log.Infof("portal logout unavailable, trying self-service kick")
+	selfSvc := NewSelfServiceClient()
+	selfSvc.SetLogger(c.log)
+	if err := selfSvc.SSOLogin(c.Username); err != nil {
+		return fmt.Errorf("SSO failed: %w", err)
+	}
+	kicked, err := selfSvc.KickAllByMAC(c.MAC)
+	if err != nil {
+		return fmt.Errorf("self-service kick failed: %w", err)
+	}
+	if kicked == 0 {
+		return errors.New("fail to logout: no sessions kicked")
+	}
+	return nil
 }

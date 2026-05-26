@@ -40,13 +40,17 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm || '' }}
-        run: go build -o "nwafu-srun-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}" main.go
+        run: |
+          go build -o "nwafu-srun-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}" .
+          go build -o "nwafu-srun-bypass-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}" ./utils/bypass
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: nwafu-srun-${{ matrix.os }}-${{ matrix.arch }}
-          path: nwafu-srun-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+          path: |
+            nwafu-srun-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+            nwafu-srun-bypass-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
 
   release:
     name: Release

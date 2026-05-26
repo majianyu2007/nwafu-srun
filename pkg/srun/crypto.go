@@ -13,18 +13,28 @@ var (
 	alpha   = "LVoJPiCN2R8G90yg+hmFHuacZ1OWMnrsSTXkYpUq/3dlbfKwv6xztjI7DeBE45QA"
 )
 
-// GetMD5 computes HMAC-MD5 (token, password) equivalent to Python's hmac.new(token, password, md5).hexdigest()
-func GetMD5(password, token string) string {
+// HMACMD5Hex computes HMAC-MD5(token, password) as hex (Srun portal password hash).
+func HMACMD5Hex(password, token string) string {
 	h := hmac.New(md5.New, []byte(token))
 	h.Write([]byte(password))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// GetSha1 computes SHA1 hash.
-func GetSha1(value string) string {
+// GetMD5 is deprecated; use HMACMD5Hex.
+func GetMD5(password, token string) string {
+	return HMACMD5Hex(password, token)
+}
+
+// SHA1Hex computes SHA1 of value as hex (Srun chksum).
+func SHA1Hex(value string) string {
 	h := sha1.New()
 	h.Write([]byte(value))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// GetSha1 is deprecated; use SHA1Hex.
+func GetSha1(value string) string {
+	return SHA1Hex(value)
 }
 
 // xencode implements Srun's custom XTEA-like encryption.
@@ -43,11 +53,11 @@ func xencode(msg, key string) string {
 	z := pwd[n]
 	y := pwd[0]
 	var c uint32 = 0x86014019 | 0x183639A0
-	var m uint32 = 0
-	var e uint32 = 0
-	var p int = 0
+	var m uint32
+	var e uint32
+	var p int
 	q := uint32(math.Floor(6.0 + 52.0/float64(n+1)))
-	var d uint32 = 0
+	var d uint32
 
 	for q > 0 {
 		d = d + c&(0x8CE0D9BF|0x731F2640)
@@ -66,7 +76,7 @@ func xencode(msg, key string) string {
 		m = m + (pwdk[uint32(p&3)^e] ^ z)
 		pwd[n] = pwd[n] + m&(0xBB390742|0x44C6F8BD)
 		z = pwd[n]
-		q = q - 1
+		q--
 	}
 	return lencode(pwd, false)
 }

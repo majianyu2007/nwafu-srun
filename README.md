@@ -4,68 +4,158 @@
 
 西北农林科技大学深澜认证工具，使用 Go 语言编写，提供跨平台独立可执行文件。
 
-该工具提供了交互式登录、查询信息和注销功能。此外，通过 `--force` 参数，可以直接执行认证（适用于需要自动认证的脚本环境）。
+该工具提供了交互式登录、查询信息、注销、bypass 计费，以及**配置文件自动认证**（双击 exe 即可登录）。
 
-## 编译与使用方法
-
-请先运行对应平台的编译脚本（位于 `utils/` 目录下），或直接使用 `go build -o nwafu-srun main.go` 编译。
-
-编译成功后，将会生成 `nwafu-srun`（Windows 下为 `nwafu-srun.exe`）。
-
-## Usage
+## 编译
 
 ```bash
-# Interactive mode (credentials optional, will prompt if not provided)
-./nwafu-srun
-./nwafu-srun -u your_username -p your_password
-
-# Force login/logout mode (no interactive prompt, for script/cron use)
-./nwafu-srun -u your_username -p your_password -f
-
-# Verbose mode (prints HTTP requests and responses)
-./nwafu-srun -u your_username -p your_password -f -v
-
-# Show help
-./nwafu-srun -h
+go build -o nwafu-srun .
+go build -o utils/bypass/bypass ./utils/bypass
 ```
 
-### Options
-**特色功能**：当因为断网导致无法解析 `portal.nwafu.edu.cn` 时，程序会自动尝试连接其备用 IP 地址 `172.26.8.11`。
+或使用 `utils/build.sh` / `utils/build.bat`。
 
-测试环境：
-- Go 1.20+ 
-- Windows 10/11, macOS, Linux
+## 使用方式
 
+### 非交互模式
 
-## 已知问题
+在以下任一情况下自动进入非交互流水线（`pre-logout? → login → bypass?`）：
 
-* 注销功能因为深澜系统的问题，不能正常使用；
-* 刚认证之后无法正常获取用户信息；
+- 命令行同时提供 `-u` 与 `-p`
+- 环境变量 `NWAFU_SRUN_USERNAME` + `NWAFU_SRUN_PASSWORD`
+- 配置文件中 `auto_auth: true` 且已保存用户名密码
+- 已保存凭据且命令行指定了 `-f` 或 `-b`
 
-### 自动认证配置 (Linux / macOS crontab)
+```bash
+./nwafu-srun -u USER -p PASS          # 登录
+./nwafu-srun -u USER -p PASS -f       # 先登出再登录
+./nwafu-srun -u USER -p PASS -b       # 登录后 bypass
+./nwafu-srun -u USER -p PASS -f -b -a # 全流水线 + 踢全部设备
+```
 
-如果您希望在路由器 (如 OpenWrt)、NAS 或 Linux 服务器上实现断网自动重连和定时重连，您可以使用 `crontab` 来定时执行此程序，并在执行时带上 `--force` 或 `-f` 标签。
+### 交互模式
 
-1. 打开终端，输入 `crontab -e` 以编辑当前用户的定时任务。
-2. 在文件末尾添加以下两行（请将 `/path/to/nwafu-srun` 替换为您实际存放该程序的绝对路径）：
+无凭据时进入菜单：
+
+| 选项 | 功能 |
+|------|------|
+| 1 | 登录（已在线时会询问是否覆盖） |
+| 2 | 强制重登（先登出再登录） |
+| 3 | 注销 |
+| 4 | 状态查询 |
+| 5 | Bypass 计费（会询问是否踢全部设备） |
+| 6 | 设置（保存配置、auto-auth、查看/删除配置等） |
+| 7 | 退出 |
+
+登录成功后可选择将凭据保存为配置文件。
+
+### 双击自动认证
+
+1. 交互模式登录成功后，选择保存配置并开启 `auto_auth`
+2. 下次在同一目录双击 `nwafu-srun` / `nwafu-srun.exe`（无参数）即可自动登录
+
+或使用命令行一次性写入配置：
+
+```bash
+./nwafu-srun -u USER -p PASS -f --save-config
+# 编辑生成的 JSON，将 "auto_auth" 设为 true
+```
+
+## 配置文件
+
+配置文件**始终**保存在当前用户目录（与 exe 安装位置无关）：
+
+| 平台 | 路径 |
+|------|------|
+| Linux/macOS | `~/.config/nwafu-srun/config.json`（或 `$XDG_CONFIG_HOME/nwafu-srun/config.json`） |
+| Windows | `%AppData%\nwafu-srun\config.json` |
+
+读取：`--config <path>` 指定其它文件；否则使用上述用户目录。`--no-config` 禁用。
+
+示例：
+
+```json
+{
+  "version": 1,
+  "username": "your_id",
+  "password": "your_password",
+  "acid": "1",
+  "auto_auth": true,
+  "force": false,
+  "bypass": false,
+  "all": false
+}
+```
+
+**安全说明**：密码以**明文**存储，文件权限为 `0600`（Windows 另设隐藏属性）。请勿在共享账户或公共电脑上保存配置。可用 `--no-config` 禁用读写。
+
+### 配置相关 CLI
+
+| Flag | 说明 |
+|------|------|
+| `--config <path>` | 指定配置文件 |
+| `--no-config` | 忽略所有配置文件 |
+| `--save-config` | 将当前 `-u/-p/-f/-b/-a` 写入用户配置目录后退出 |
+
+## 选项一览
+
+| Flag | 说明 |
+|------|------|
+| `-u`, `-p` | 用户名 / 密码 |
+| `-f` | 登录前登出 |
+| `-b` | 登录后 bypass |
+| `-a` | bypass 时踢账户下所有设备 |
+| `--acid` | ac_id（默认 1） |
+| `-v` | 详细日志（stderr） |
+| `-h` | 帮助 |
+
+环境变量：`NWAFU_SRUN_USERNAME`、`NWAFU_SRUN_PASSWORD`。
+
+## Bypass 小工具
+
+```bash
+./utils/bypass/bypass -u USER           # 已在线时仅 bypass
+./utils/bypass/bypass --login -u USER -p PASS
+./utils/bypass/bypass                   # 从配置文件读取 username
+```
+
+详见 [utils/bypass/README.md](utils/bypass/README.md)。
+
+## 错误自检
+
+失败时除 `Error:` 外会打印 `Hint:` 建议：
+
+| 错误类型 | 含义 | 建议 |
+|----------|------|------|
+| `not online` | 未认证 | 先执行登录（菜单 1） |
+| `portal unreachable` | 无法连接认证页 | 检查校园网 / DNS |
+| `SSO redirected to login` | 自服务 SSO 失败 | 先 Portal 登录再 bypass |
+| `local MAC undetected` | 读不到本机 MAC | 先登录，或用 `-a` |
+| `no session matched` | 没有匹配 MAC 的会话 | 确认在线或用 `-a` |
+| `auth failed` | 账号密码错误 | 检查凭据与 `--acid` |
+
+使用 `-v` 可在 stderr 查看 HTTP 详情。
+
+## 退出码
+
+| 码 | 含义 |
+|----|------|
+| 0 | 成功 |
+| 1 | 运行时错误（认证/网络/bypass 失败） |
+| 2 | 参数或配置错误 |
+
+## crontab 示例
 
 ```cron
-# 开机时运行一次自动认证
-@reboot sleep 30 && /path/to/nwafu-srun -u your_username -p your_password -f >> /tmp/nwafu-srun.log 2>&1
-
-# 每天早上 6:00 定时运行自动认证
-0 6 * * * /path/to/nwafu-srun -u your_username -p your_password -f >> /tmp/nwafu-srun.log 2>&1
+@reboot sleep 30 && NWAFU_SRUN_USERNAME=u NWAFU_SRUN_PASSWORD=p /path/to/nwafu-srun -f >> /tmp/nwafu-srun.log 2>&1
 ```
 
-> **注意**：开机启动时（`@reboot`）建议加上 `sleep 30` 延时，确保网络接口和路由表已经初始化完毕后再执行认证程序。日志会输出到 `/tmp/nwafu-srun.log` 中以便日后排查问题。
+## 开发
 
----
-
-*本项目基于 [dingyx99/nwafu-srun](https://github.com/dingyx99/nwafu-srun) 的算法重构，感谢原作者的研究。*
-
-## 致谢
-
-[vincentimba/shenlan_xauat](https://github.com/vincentimba/shenlan_xauat): 项目灵感（其实是不想实现那个加密算法了）
+```bash
+go test ./...
+go vet ./...
+```
 
 ## 许可
 
