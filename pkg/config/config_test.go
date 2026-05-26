@@ -47,6 +47,27 @@ func TestMergePriority(t *testing.T) {
 	}
 }
 
+func TestShouldOfferSavePrompt(t *testing.T) {
+	rt := Runtime{
+		File:       File{Username: "u", Password: "p", AutoAuth: true},
+		SourcePath: "/cfg.json",
+	}
+	rt.Username = "u"
+	rt.Password = "p"
+	rt.AutoAuth = true
+	if rt.ShouldOfferSavePrompt() {
+		t.Fatal("should skip when auto-auth + matching creds")
+	}
+	rt.AutoAuth = false
+	if !rt.ShouldOfferSavePrompt() {
+		t.Fatal("should offer when creds match but auto_auth off")
+	}
+	rt.SavePromptDisabled = true
+	if rt.ShouldOfferSavePrompt() {
+		t.Fatal("should skip when never")
+	}
+}
+
 func TestCredentialsMatch(t *testing.T) {
 	f := File{Username: "a", Password: "b"}
 	if !f.CredentialsMatch("a", "b") {
@@ -74,6 +95,68 @@ func TestSaveNeverAskMarker(t *testing.T) {
 	loaded, err := Load(LoadOptions{ExplicitPath: paths.User})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !loaded.SavePromptDisabled {
+		t.Fatal("expected save_prompt_disabled")
+	}
+}
+
+func TestFileForPersistAllOnlyWithBypass(t *testing.T) {
+	rt := Runtime{File: File{Bypass: false, All: true, Username: "u", Password: "p"}}
+	f := FileForPersist(rt, CLIFlags{}, File{})
+	if f.All {
+		t.Fatal("all should not persist without bypass")
+	}
+	rt.Bypass = true
+	f2 := FileForPersist(rt, CLIFlags{BypassSet: true, AllSet: true}, File{})
+	if !f2.All {
+		t.Fatal("all should persist when -b and -a set on CLI")
+	}
+	f3 := FileForPersist(rt, CLIFlags{BypassSet: true}, File{All: true})
+	if !f3.All {
+		t.Fatal("all should be preserved from disk when saving bypass")
+	}
+}
+
+func TestFileForPersistKeepsDiskPipelineWithoutCLI(t *testing.T) {
+	disk := File{Force: true, Bypass: true, All: true, Username: "u", Password: "p"}
+	rt := Runtime{File: disk}
+	rt.Force = false
+	rt.Bypass = false
+	rt.All = false
+	f := FileForPersist(rt, CLIFlags{}, disk)
+	if !f.Force || !f.Bypass || !f.All {
+		t.Fatalf("expected disk pipeline flags preserved, got %+v", f)
+	}
+}
+
+func TestSanitizeClearsAllWithoutBypass(t *testing.T) {
+	f := File{Bypass: false, All: true}
+	f.Sanitize()
+	if f.All {
+		t.Fatal("expected all cleared")
+	}
+}
+
+func TestSaveNeverAskMarkerPreservesCredentials(t *testing.T) {
+	dir := t.TempDir()
+	paths := Paths{User: filepath.Join(dir, "nwafu-srun", "config.json")}
+	if err := Save(paths.User, &File{
+		Version:  CurrentVersion,
+		Username: "keep",
+		Password: "secret",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveNeverAskMarker(paths); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(LoadOptions{ExplicitPath: paths.User})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Username != "keep" || loaded.Password != "secret" {
+		t.Fatalf("credentials wiped: %+v", loaded.File)
 	}
 	if !loaded.SavePromptDisabled {
 		t.Fatal("expected save_prompt_disabled")

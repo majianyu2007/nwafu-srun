@@ -8,6 +8,14 @@ import (
 
 func newInsecureTransport() *http.Transport {
 	return &http.Transport{
+		// Explicitly do NOT use http.ProxyFromEnvironment.
+		//
+		// Both portal.nwafu.edu.cn and service.nwafu.edu.cn are campus-only
+		// hosts; routing them through a user-level HTTP proxy almost always
+		// makes them unreachable, and these endpoints must never leave the
+		// campus network. Keeping Proxy nil also matches the zero-value, but
+		// the explicit assignment documents the intent.
+		Proxy:           nil,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // campus fallback uses IP with mismatched cert
 	}
 }
@@ -42,7 +50,7 @@ func probeURL(client *http.Client, url string) bool {
 		return false
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode < 500
+	return resp.StatusCode < 400
 }
 
 // Sleep is a test hook for delays (defaults to time.Sleep).

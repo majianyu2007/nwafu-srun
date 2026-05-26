@@ -40,7 +40,10 @@ type Client struct {
 
 // NewClient creates a new Srun Client instance.
 func NewClient(username, password, acid string) *Client {
-	jar, _ := cookiejar.New(nil)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		jar = nil
+	}
 	return &Client{
 		Username:   username,
 		Password:   password,
@@ -288,7 +291,7 @@ func (c *Client) LogIn() (*LoginInfo, error) {
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("User-Agent", DefaultUserAgent)
 
-	c.log.Debugf("GET %s", u.String())
+	c.log.Debugf("GET %s", redactSensitive(u.String()))
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, wrapPortalErr(err, "login")
@@ -299,11 +302,27 @@ func (c *Client) LogIn() (*LoginInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read login response: %w", err)
 	}
-	c.log.Debugf("login response: %s", string(body))
+	c.log.Debugf("login response: %s", redactSensitive(string(body)))
 
 	re := regexp.MustCompile(`"res":"(.*?)"`)
 	matches := re.FindStringSubmatch(string(body))
-	if len(matches) > 1 && matches[1] == "ok" {
+	res := ""
+	if len(matches) > 1 {
+		res = matches[1]
+	}
+	errRe := regexp.MustCompile(`"error":"(.*?)"`)
+	errMatches := errRe.FindStringSubmatch(string(body))
+	errStr := ""
+	if len(errMatches) > 1 {
+		errStr = errMatches[1]
+	}
+	errMsgRe := regexp.MustCompile(`"error_msg":"(.*?)"`)
+	errMsgMatches := errMsgRe.FindStringSubmatch(string(body))
+	errMsg := ""
+	if len(errMsgMatches) > 1 {
+		errMsg = errMsgMatches[1]
+	}
+	if loginSucceeded(res, errStr, errMsg) {
 		sleep(LoginSettleDelay)
 		var lastErr error
 		for i := 0; i < LoginInfoRetry; i++ {
@@ -322,17 +341,48 @@ func (c *Client) LogIn() (*LoginInfo, error) {
 			// Some gateways return transient "not_online_error" immediately after
 			// reporting login success. Treat login as successful and return a
 			// minimal info block so interactive UX remains consistent.
-			return &LoginInfo{
+			info := &LoginInfo{
 				Username: c.Username,
 				IP:       c.IP,
 				Balance:  "0.00",
-			}, nil
+				MAC:      c.MAC,
+			}
+			if info.MAC == "" {
+				c.log.Warnf("device MAC not detected; bypass without -a/--all may fail")
+			}
+			return info, nil
 		}
 		return nil, lastErr
 	}
 
-	errMsg := parsePortalError(string(body), matches)
+	if errMsg == "" {
+		errMsg = parsePortalError(string(body), matches)
+	}
 	return nil, fmt.Errorf("%w: %s", ErrAuthFailed, errMsg)
+}
+
+var (
+	loginSuccessRe = regexp.MustCompile(`(?i)\b(success|welcome|ok)\b`)
+	loginFailRe    = regexp.MustCompile(`(?i)\b(unsuccessful|fail|failed|invalid|incorrect|wrong|error)\b`)
+)
+
+// loginSucceeded recognises Srun login success responses.
+//
+// Srun deployments are inconsistent about where the success marker lives:
+//   - Some return {"res":"ok"} or {"error":"ok"}.
+//   - Some return {"res":"login_error","error":"login_error",
+//     "error_msg":"Authentication success,Welcome!"} after a successful login.
+//
+// Matching uses word boundaries so "unsuccessful" is not treated as "success".
+func loginSucceeded(res, errStr, errMsg string) bool {
+	if res == "ok" || errStr == "ok" {
+		return true
+	}
+	combined := res + " " + errStr + " " + errMsg
+	if loginFailRe.MatchString(combined) {
+		return false
+	}
+	return loginSuccessRe.MatchString(combined)
 }
 
 func parsePortalError(body string, resMatches []string) string {
@@ -389,7 +439,8 @@ func (c *Client) GetLoginInfo() (*LoginInfo, error) {
 		return nil, err
 	}
 	if info.MAC != "" {
-		c.MAC = info.MAC
+		c.MAC = normalizeMAC(info.MAC)
+		info.MAC = c.MAC
 	}
 	return info, nil
 }
@@ -405,7 +456,7 @@ func parseLoginInfo(strLoginInfo, ip string) (*LoginInfo, error) {
 		return nil, fmt.Errorf("%w: %s", ErrNotOnline, errInfo)
 	}
 
-	reUser := regexp.MustCompile(`"user_name":"(([a-zA-Z]|[0-9])*)"`)
+	reUser := regexp.MustCompile(`"user_name":"([^"]*)"`)
 	reBalance := regexp.MustCompile(`"user_balance":(.*?),`)
 	reSumBytes := regexp.MustCompile(`"sum_bytes":(\d+),`)
 	reMAC := regexp.MustCompile(`"user_mac":"(([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})"`)
@@ -422,7 +473,7 @@ func parseLoginInfo(strLoginInfo, ip string) (*LoginInfo, error) {
 		info.UsedMB = bytesVal / 1_000_000.0
 	}
 	if m := reMAC.FindStringSubmatch(strLoginInfo); len(m) > 1 {
-		info.MAC = m[1]
+		info.MAC = normalizeMAC(m[1])
 	}
 	return info, nil
 }
@@ -514,7 +565,16 @@ func (c *Client) logOutInternal(quiet bool) error {
 		return errors.New("portal logout failed")
 	}
 
-	// Portal logout often fails; try self-service kick as fallback.
+	// Portal logout often fails; try self-service kick as fallback (own MAC only).
+	if c.MAC == "" {
+		if info, err := c.GetLoginInfo(); err == nil && info.MAC != "" {
+			c.MAC = info.MAC
+		}
+	}
+	if c.MAC == "" {
+		return fmt.Errorf("portal logout failed and %w: cannot kick sessions without device MAC", ErrMACUndetected)
+	}
+
 	c.log.Infof("portal logout unavailable, trying self-service kick")
 	selfSvc := NewSelfServiceClient()
 	selfSvc.SetLogger(c.log)

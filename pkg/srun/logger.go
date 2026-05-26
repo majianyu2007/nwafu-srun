@@ -49,5 +49,9 @@ func (l *VerboseLogger) Infof(format string, args ...any) {
 }
 
 func (l *VerboseLogger) Warnf(format string, args ...any) {
-	fmt.Fprintf(l.w, "[%s] WARN: "+format+"\n", append([]any{l.prefix}, args...)...)
+	if l.verbose {
+		fmt.Fprintf(l.w, "[%s] WARN: "+format+"\n", append([]any{l.prefix}, args...)...)
+		return
+	}
+	fmt.Fprintf(l.w, "WARN: "+format+"\n", args...)
 }

@@ -15,21 +15,9 @@ go build -o nwafu-srun .
 # 2) 直接登录
 ./nwafu-srun -u USER -p PASS
 
-# 3) 保存配置并启用自动认证（亦可通过交互菜单设置）
-./nwafu-srun -u USER -p PASS --save-config
-```
-
-## 快速开始
-
-```bash
-# 1) 编译
-go build -o nwafu-srun .
-
-# 2) 直接登录
-./nwafu-srun -u USER -p PASS
-
 # 3) 保存配置并启用自动认证（交互菜单中也可设置）
 ./nwafu-srun -u USER -p PASS --save-config
+# 编辑生成的 JSON，将 "auto_auth" 设为 true，下次无参数即可自动登录
 ```
 
 ## 编译
@@ -69,9 +57,12 @@ go build -o utils/bypass/bypass ./utils/bypass
 | 2 | 强制重登（先登出再登录） |
 | 3 | 注销 |
 | 4 | 状态查询 |
-| 5 | Bypass 计费（询问是否断开所有设备） |
-| 6 | 设置（保存配置、auto-auth、查看/删除配置等） |
-| 7 | 退出 |
+| 5 | Bypass 计费（询问是否踢光账户下所有会话） |
+| 6 | 设置（保存配置、切换并立即保存 auto-auth、查看/删除配置等） |
+| 7 | 修改本会话凭据（用户名/密码） |
+| 8 | 退出（`q` / `quit` / `exit` 亦可） |
+
+输入用户名和密码后会询问是否立即登录；登录成功则出现保存凭据提示（`y` / `n` / `never`）。`Ctrl+D` 安静退出。
 
 登录成功后可选择将凭据保存为配置文件。
 如果你不希望每次都看到“是否保存凭据”的提示，可在提示中输入 `never` 永久关闭（设置菜单可恢复）。
@@ -79,7 +70,9 @@ go build -o utils/bypass/bypass ./utils/bypass
 ### 自动认证
 
 1. 交互模式登录成功后，选择保存配置并开启 `auto_auth`
-2. 此后在同一目录直接运行 `nwafu-srun` / `nwafu-srun.exe`（无参数）即可自动登录
+2. 此后直接运行 `nwafu-srun` / `nwafu-srun.exe`（无参数）即可自动登录
+
+若配置里同时启用了 `force` 或 `bypass`，无参数启动时会先打印一行流水线提示并自动执行对应步骤；需要菜单时请传 `--no-config`。
 
 或通过命令行一次性写入配置：
 
@@ -122,7 +115,7 @@ go build -o utils/bypass/bypass ./utils/bypass
 |------|------|
 | `--config <path>` | 指定配置文件 |
 | `--no-config` | 忽略所有配置文件 |
-| `--save-config` | 将当前 `-u/-p/-f/-b/-a` 写入用户配置目录后退出 |
+| `--save-config` | 将当前合并后的配置写入用户目录（可用已加载的 config 提供凭据；`all` 仅在 `bypass` 为真时写入） |
 
 ## 选项一览
 
@@ -130,8 +123,8 @@ go build -o utils/bypass/bypass ./utils/bypass
 |------|------|
 | `-u`, `-p` | 用户名 / 密码 |
 | `-f` | 登录前登出 |
-| `-b` | 登录后 bypass |
-| `-a` | bypass 时断开账户下所有设备 |
+| `-b` | 登录后 bypass（默认仅踢自己 MAC 的会话） |
+| `-a` | 与 `-b` 配合：踢光账户下所有会话（bypass 真正生效所必需） |
 | `--acid` | ac_id（默认 1） |
 | `-v` | 详细日志（stderr） |
 | `-h` | 帮助 |
@@ -140,6 +133,12 @@ go build -o utils/bypass/bypass ./utils/bypass
 
 ## Bypass 命令行工具
 
+源码位于 `utils/bypass/`，**不会**随 GitHub Release 发布预编译包；需要请自行编译：
+
+```bash
+go build -o utils/bypass/bypass ./utils/bypass
+```
+
 ```bash
 ./utils/bypass/bypass -u USER           # 已在线时仅 bypass
 ./utils/bypass/bypass --login -u USER -p PASS
@@ -147,6 +146,23 @@ go build -o utils/bypass/bypass ./utils/bypass
 ```
 
 详见 [utils/bypass/README.md](utils/bypass/README.md)。
+
+### Bypass 工作原理
+
+Bypass 的有效性依赖于一次性"重写"账户下**所有**在线会话的 user_mac 让 RADIUS accounting 状态错乱：
+
+1. SSO 登入自服务门户，列出该账号当前所有在线会话（一般 ≤ 3）
+2. 对每个目标会话各生成一个**随机假 MAC**，立即提交下线请求
+3. 设备在 Portal 网关层并未真正注销，会立刻重新登记会话
+4. 由于 accounting 状态被打乱，新登记出的会话通常**不计费**
+
+注意：
+
+- 只踢一部分会话（例如只踢自己 MAC 的那一条）通常不会触发不计费效果——bypass 真正生效需要**一次踢光**所有会话。
+- 但"踢光所有会话"也意味着同账户下其他人的设备会被一起踢掉。出于这个副作用，**默认只踢自己 MAC 的会话**：
+  - 命令行：要真正 bypass 必须显式加 `-a`
+  - 交互菜单：选择 5 后会询问 *"Kick ALL sessions on this account?"*，回答 `y` 才全踢
+- 也不需要"持续踢"：触发一次成功的全踢即可。
 
 > **免责声明**：Bypass 功能的实际效果取决于校园网认证系统的策略与配置，本项目不保证其在所有环境、所有时间均能生效。使用者应在使用后自行验证计费是否已被绕过，因 bypass 失败产生的流量费用与本项目无关。
 
@@ -159,9 +175,11 @@ go build -o utils/bypass/bypass ./utils/bypass
 | `not online` | 未认证 | 先执行登录（菜单 1） |
 | `portal unreachable` | 无法连接认证页 | 检查校园网 / DNS |
 | `SSO redirected to login` | 自服务 SSO 失败 | 先 Portal 登录再 bypass |
-| `local MAC undetected` | 无法获取本机 MAC 地址 | 先登录，或使用 `-a` |
-| `no session matched` | 没有匹配 MAC 的会话 | 确认在线或使用 `-a` |
+| `local MAC undetected` | 无法获取本机 MAC 地址 | 先登录获取 MAC，或使用 `-a` 全踢 |
+| `no session matched the given MAC` | 没有匹配本机 MAC 的会话 | 确认本机已在线，或使用 `-a` 全踢 |
+| `no online sessions to kick` | 自服务里看不到任何在线会话 | 先 Portal 登录使会话注册到 RADIUS |
 | `auth failed` | 账号密码错误 | 检查凭据与 `--acid` |
+| `kick session failed` / `context deadline exceeded` / `198.18.x.x` | 代理软件（TUN 模式 / fake-IP）拦截了校内流量 | 在 Clash / Mihomo / v2rayN / Surge 等代理软件里把 `service.nwafu.edu.cn`、`portal.nwafu.edu.cn` 与 `172.26.0.0/16` 加入直连 / bypass 规则，或临时关闭代理后重试 |
 
 使用 `-v` 可在 stderr 查看 HTTP 详情。
 

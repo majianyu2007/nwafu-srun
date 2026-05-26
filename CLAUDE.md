@@ -10,7 +10,7 @@ Go CLI for Srun (深澜) campus network auth at NWAFU: login, logout, status, by
 
 ```bash
 go build -o nwafu-srun .
-go build -o utils/bypass/bypass ./utils/bypass
+go build -o utils/bypass/bypass ./utils/bypass   # local only; not in CI release artifacts
 go test ./...
 ```
 

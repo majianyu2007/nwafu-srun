@@ -18,7 +18,7 @@ const (
 	// HTTP
 	DefaultUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	PortalTimeout      = 5 * time.Second
-	SelfServiceTimeout = 10 * time.Second
+	SelfServiceTimeout = 15 * time.Second
 	ProbeTimeout       = 3 * time.Second
 	DNSTimeout         = 3 * time.Second
 
@@ -28,6 +28,12 @@ const (
 	BypassCheckDelay  = 2 * time.Second
 	LoginInfoRetry    = 5
 	LoginInfoRetryGap = 500 * time.Millisecond
+
+	// Kick retry: useful when a TUN-mode VPN / proxy drops the first
+	// connection; a fast retry usually goes through. Does NOT help when the
+	// proxy outright blackholes campus traffic.
+	KickRetry    = 2
+	KickRetryGap = 800 * time.Millisecond
 
 	// Env
 	EnvUsername = "NWAFU_SRUN_USERNAME"

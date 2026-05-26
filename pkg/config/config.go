@@ -59,11 +59,11 @@ var (
 
 // Load reads config from explicit path or the user config directory.
 func Load(opts LoadOptions) (*Runtime, error) {
-	paths, err := ResolvePaths()
-	if err != nil {
-		return &Runtime{Paths: paths}, nil
-	}
+	paths, pathErr := ResolvePaths()
 	rt := &Runtime{Paths: paths}
+	if pathErr != nil && !opts.NoConfig {
+		return rt, fmt.Errorf("user config directory unavailable: %w", pathErr)
+	}
 
 	if opts.NoConfig {
 		return rt, nil
@@ -110,7 +110,15 @@ func readFile(path string) (*File, error) {
 	if f.Version != CurrentVersion {
 		return nil, fmt.Errorf("%w: got %d want %d", ErrUnsupportedVersion, f.Version, CurrentVersion)
 	}
+	f.Sanitize()
 	return &f, nil
+}
+
+// Sanitize clears inconsistent flags after load or before save.
+func (f *File) Sanitize() {
+	if !f.Bypass {
+		f.All = false
+	}
 }
 
 // Merge applies priority: CLI > env > config file defaults.
@@ -143,12 +151,57 @@ func Merge(rt *Runtime, cli CLIFlags, envUser, envPass string) Runtime {
 	if cli.AllSet {
 		out.All = cli.All
 	}
+	out.File.Sanitize()
 	return out
 }
 
 // HasCredentials reports whether username and password are both set.
 func (r Runtime) HasCredentials() bool {
 	return r.Username != "" && r.Password != ""
+}
+
+// FileForPersist builds the on-disk config from runtime state.
+//
+// Pipeline flags (force/bypass/all) are taken from cli when the user set them
+// on the command line; otherwise the values from fromDisk are kept so
+// --save-config does not accidentally persist one-off merged flags.
+func FileForPersist(rt Runtime, cli CLIFlags, fromDisk File) File {
+	f := File{
+		Version:            CurrentVersion,
+		Username:           rt.Username,
+		Password:           rt.Password,
+		AcID:               rt.AcID,
+		AutoAuth:           rt.AutoAuth,
+		SavePromptDisabled: rt.SavePromptDisabled,
+	}
+	if cli.ForceSet {
+		f.Force = rt.Force
+	} else {
+		f.Force = fromDisk.Force
+	}
+	if cli.BypassSet {
+		f.Bypass = rt.Bypass
+	} else {
+		f.Bypass = fromDisk.Bypass
+	}
+	if f.Bypass {
+		if cli.AllSet {
+			f.All = rt.All
+		} else {
+			f.All = fromDisk.All
+		}
+	}
+	f.Sanitize()
+	return f
+}
+
+// PersistRuntime writes the user config file from runtime state.
+func PersistRuntime(paths Paths, rt Runtime, cli CLIFlags, fromDisk File) error {
+	if paths.User == "" {
+		return errors.New("user config path unavailable")
+	}
+	f := FileForPersist(rt, cli, fromDisk)
+	return Save(paths.User, &f)
 }
 
 // Save writes config to path, creating parent dirs and securing permissions.
@@ -173,15 +226,21 @@ func Save(path string, f *File) error {
 	return secureFile(path)
 }
 
-// SaveNeverAskMarker writes minimal config to user dir disabling save prompts.
+// SaveNeverAskMarker sets save_prompt_disabled without removing other fields.
 func SaveNeverAskMarker(paths Paths) error {
 	if paths.User == "" {
 		return errors.New("user config path unavailable")
 	}
-	return Save(paths.User, &File{
-		Version:            CurrentVersion,
-		SavePromptDisabled: true,
-	})
+	f, err := readFile(paths.User)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			f = &File{Version: CurrentVersion}
+		} else {
+			return err
+		}
+	}
+	f.SavePromptDisabled = true
+	return Save(paths.User, f)
 }
 
 // ReenableSavePrompt clears save_prompt_disabled in the user config file if present.
@@ -212,4 +271,31 @@ func (f File) Redacted() File {
 // CredentialsMatch reports whether stored credentials equal the session.
 func (f File) CredentialsMatch(username, password string) bool {
 	return f.Username == username && f.Password == password
+}
+
+// ShouldOfferSavePrompt reports whether the interactive save-credentials dialog
+// is still useful. Skip only when config already enables unattended login with
+// the same credentials—not merely because the password matches on disk.
+func (r Runtime) ShouldOfferSavePrompt() bool {
+	if r.SavePromptDisabled || !r.HasCredentials() {
+		return false
+	}
+	if r.SourcePath != "" && r.AutoAuth && r.File.CredentialsMatch(r.Username, r.Password) {
+		return false
+	}
+	return true
+}
+
+// SavePromptSkipReason explains why the save dialog was not shown (empty if offered).
+func (r Runtime) SavePromptSkipReason() string {
+	if r.SavePromptDisabled {
+		return "save prompt disabled; re-enable via Settings → Re-enable save prompt"
+	}
+	if !r.HasCredentials() {
+		return ""
+	}
+	if r.SourcePath != "" && r.AutoAuth && r.File.CredentialsMatch(r.Username, r.Password) {
+		return "credentials and auto-auth already configured at " + r.SourcePath
+	}
+	return ""
 }
