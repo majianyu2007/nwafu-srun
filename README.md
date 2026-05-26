@@ -4,7 +4,20 @@
 
 西北农林科技大学深澜认证工具，使用 Go 语言编写，提供跨平台独立可执行文件。
 
-该工具提供了交互式登录、查询信息、注销、bypass 计费，以及**配置文件自动认证**（双击 exe 即可登录）。
+支持交互式登录、信息查询、注销、bypass 计费，以及**配置文件自动认证**（无参数运行即可登录）。
+
+## 快速开始
+
+```bash
+# 1) 编译
+go build -o nwafu-srun .
+
+# 2) 直接登录
+./nwafu-srun -u USER -p PASS
+
+# 3) 保存配置并启用自动认证（亦可通过交互菜单设置）
+./nwafu-srun -u USER -p PASS --save-config
+```
 
 ## 快速开始
 
@@ -26,13 +39,13 @@ go build -o nwafu-srun .
 go build -o utils/bypass/bypass ./utils/bypass
 ```
 
-或使用 `utils/build.sh` / `utils/build.bat`。
+也可使用 `utils/build.sh` / `utils/build.bat`。
 
 ## 使用方式
 
 ### 非交互模式
 
-在以下任一情况下自动进入非交互流水线（`pre-logout? → login → bypass?`）：
+满足以下任一条件时自动进入非交互流水线（`pre-logout? → login → bypass?`）：
 
 - 命令行同时提供 `-u` 与 `-p`
 - 环境变量 `NWAFU_SRUN_USERNAME` + `NWAFU_SRUN_PASSWORD`
@@ -43,7 +56,7 @@ go build -o utils/bypass/bypass ./utils/bypass
 ./nwafu-srun -u USER -p PASS          # 登录
 ./nwafu-srun -u USER -p PASS -f       # 先登出再登录
 ./nwafu-srun -u USER -p PASS -b       # 登录后 bypass
-./nwafu-srun -u USER -p PASS -f -b -a # 全流水线 + 踢全部设备
+./nwafu-srun -u USER -p PASS -f -b -a # 完整流水线并断开所有设备
 ```
 
 ### 交互模式
@@ -52,23 +65,23 @@ go build -o utils/bypass/bypass ./utils/bypass
 
 | 选项 | 功能 |
 |------|------|
-| 1 | 登录（已在线时会询问是否覆盖） |
+| 1 | 登录（已在线时询问是否覆盖） |
 | 2 | 强制重登（先登出再登录） |
 | 3 | 注销 |
 | 4 | 状态查询 |
-| 5 | Bypass 计费（会询问是否踢全部设备） |
+| 5 | Bypass 计费（询问是否断开所有设备） |
 | 6 | 设置（保存配置、auto-auth、查看/删除配置等） |
 | 7 | 退出 |
 
 登录成功后可选择将凭据保存为配置文件。
 如果你不希望每次都看到“是否保存凭据”的提示，可在提示中输入 `never` 永久关闭（设置菜单可恢复）。
 
-### 双击自动认证
+### 自动认证
 
 1. 交互模式登录成功后，选择保存配置并开启 `auto_auth`
-2. 下次在同一目录双击 `nwafu-srun` / `nwafu-srun.exe`（无参数）即可自动登录
+2. 此后在同一目录直接运行 `nwafu-srun` / `nwafu-srun.exe`（无参数）即可自动登录
 
-或使用命令行一次性写入配置：
+或通过命令行一次性写入配置：
 
 ```bash
 ./nwafu-srun -u USER -p PASS -f --save-config
@@ -77,14 +90,14 @@ go build -o utils/bypass/bypass ./utils/bypass
 
 ## 配置文件
 
-配置文件**始终**保存在当前用户目录（与 exe 安装位置无关）：
+配置文件**始终**保存在当前用户目录（与可执行文件位置无关）：
 
 | 平台 | 路径 |
 |------|------|
 | Linux/macOS | `~/.config/nwafu-srun/config.json`（或 `$XDG_CONFIG_HOME/nwafu-srun/config.json`） |
 | Windows | `%AppData%\nwafu-srun\config.json` |
 
-读取：`--config <path>` 指定其它文件；否则使用上述用户目录。`--no-config` 禁用。
+读取：`--config <path>` 指定其他文件；否则使用上述用户目录。`--no-config` 禁用。
 
 示例：
 
@@ -101,7 +114,7 @@ go build -o utils/bypass/bypass ./utils/bypass
 }
 ```
 
-**安全说明**：密码以**明文**存储，文件权限为 `0600`（Windows 另设隐藏属性）。请勿在共享账户或公共电脑上保存配置。可用 `--no-config` 禁用读写。
+**安全说明**：密码以**明文**存储，文件权限为 `0600`（Windows 另设隐藏属性）。请勿在共享账户或公共计算机上保存配置。可使用 `--no-config` 禁用读写。
 
 ### 配置相关 CLI
 
@@ -118,14 +131,14 @@ go build -o utils/bypass/bypass ./utils/bypass
 | `-u`, `-p` | 用户名 / 密码 |
 | `-f` | 登录前登出 |
 | `-b` | 登录后 bypass |
-| `-a` | bypass 时踢账户下所有设备 |
+| `-a` | bypass 时断开账户下所有设备 |
 | `--acid` | ac_id（默认 1） |
 | `-v` | 详细日志（stderr） |
 | `-h` | 帮助 |
 
 环境变量：`NWAFU_SRUN_USERNAME`、`NWAFU_SRUN_PASSWORD`。
 
-## Bypass 小工具
+## Bypass 命令行工具
 
 ```bash
 ./utils/bypass/bypass -u USER           # 已在线时仅 bypass
@@ -134,6 +147,8 @@ go build -o utils/bypass/bypass ./utils/bypass
 ```
 
 详见 [utils/bypass/README.md](utils/bypass/README.md)。
+
+> **免责声明**：Bypass 功能的实际效果取决于校园网认证系统的策略与配置，本项目不保证其在所有环境、所有时间均能生效。使用者应在使用后自行验证计费是否已被绕过，因 bypass 失败产生的流量费用与本项目无关。
 
 ## 错误自检
 
@@ -144,8 +159,8 @@ go build -o utils/bypass/bypass ./utils/bypass
 | `not online` | 未认证 | 先执行登录（菜单 1） |
 | `portal unreachable` | 无法连接认证页 | 检查校园网 / DNS |
 | `SSO redirected to login` | 自服务 SSO 失败 | 先 Portal 登录再 bypass |
-| `local MAC undetected` | 读不到本机 MAC | 先登录，或用 `-a` |
-| `no session matched` | 没有匹配 MAC 的会话 | 确认在线或用 `-a` |
+| `local MAC undetected` | 无法获取本机 MAC 地址 | 先登录，或使用 `-a` |
+| `no session matched` | 没有匹配 MAC 的会话 | 确认在线或使用 `-a` |
 | `auth failed` | 账号密码错误 | 检查凭据与 `--acid` |
 
 使用 `-v` 可在 stderr 查看 HTTP 详情。
