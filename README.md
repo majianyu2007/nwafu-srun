@@ -15,9 +15,8 @@ go build -o nwafu-srun .
 # 2) 直接登录
 ./nwafu-srun -u USER -p PASS
 
-# 3) 保存配置并启用自动认证（交互菜单中也可设置）
+# 3) 保存配置；在交互菜单 6（设置）中开启 auto-auth / bypass 等，或编辑 JSON 的 "auto_auth"
 ./nwafu-srun -u USER -p PASS --save-config
-# 编辑生成的 JSON，将 "auto_auth" 设为 true，下次无参数即可自动登录
 ```
 
 ## 编译
@@ -58,7 +57,7 @@ go build -o utils/bypass/bypass ./utils/bypass
 | 3 | 注销 |
 | 4 | 状态查询 |
 | 5 | Bypass 计费（询问是否踢光账户下所有会话） |
-| 6 | 设置（保存配置、切换并立即保存 auto-auth、查看/删除配置等） |
+| 6 | 设置（保存凭据、切换 auto-auth / force / bypass / kick-all 并立即写入配置等） |
 | 7 | 修改本会话凭据（用户名/密码） |
 | 8 | 退出（`q` / `quit` / `exit` 亦可） |
 
@@ -71,6 +70,8 @@ go build -o utils/bypass/bypass ./utils/bypass
 
 1. 交互模式登录成功后，选择保存配置并开启 `auto_auth`
 2. 此后直接运行 `nwafu-srun` / `nwafu-srun.exe`（无参数）即可自动登录
+
+在**设置菜单（6）**里也可切换 `force`（先登出）、`bypass`（登录后 bypass）、`kick-all`（等同 `-a`，会二次确认），与 `auto_auth` 一样会立即写入配置文件。
 
 若配置里同时启用了 `force` 或 `bypass`，无参数启动时会先打印一行流水线提示并自动执行对应步骤；需要菜单时请传 `--no-config`。
 

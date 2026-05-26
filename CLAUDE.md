@@ -40,7 +40,7 @@ pkg/srun/
 
 ## Interactive menu
 
-1 Login (online check) · 2 Force re-login · 3 Logout · 4 Status · 5 Bypass · 6 Settings · 7 Exit
+1 Login · 2 Force re-login · 3 Logout · 4 Status · 5 Bypass · 6 Settings (auto-auth/force/bypass/all) · 7 Change credentials · 8 Exit
 
 After successful login: optional save prompt (y / n / Never).
 

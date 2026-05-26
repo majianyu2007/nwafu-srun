@@ -468,19 +468,42 @@ func printLoginOutcome(info *srun.LoginInfo, err error) {
 	fmt.Print(srun.FormatLoginInfo(info))
 }
 
+func onOff(v bool) string {
+	if v {
+		return "ON"
+	}
+	return "OFF"
+}
+
+// saveRuntimeConfig writes rt to the user config file (pipeline flags from rt.File).
+func saveRuntimeConfig(rt *config.Runtime) error {
+	if noConfig {
+		return errors.New("not written: --no-config")
+	}
+	if rt.Paths.User == "" {
+		return errors.New("user config path unavailable")
+	}
+	if err := config.PersistRuntime(rt.Paths, *rt, cliFlags, rt.File); err != nil {
+		return err
+	}
+	rt.File = config.FileForPersist(*rt, cliFlags, rt.File)
+	rt.SourcePath = rt.Paths.User
+	return nil
+}
+
 func settingsMenu(rt *config.Runtime, client *srun.Client) {
 	for {
-		autoStr := "OFF"
-		if rt.AutoAuth {
-			autoStr = "ON"
-		}
-		fmt.Printf("\n--- Settings (auto-auth: %s) ---\n", autoStr)
+		fmt.Printf("\n--- Settings (auto-auth: %s | force: %s | bypass: %s | all: %s) ---\n",
+			onOff(rt.AutoAuth), onOff(rt.Force), onOff(rt.Bypass), onOff(rt.All))
 		fmt.Println("  1) Save current credentials as config")
 		fmt.Println("  2) Toggle auto-auth (saved immediately)")
-		fmt.Println("  3) Show config paths and redacted contents")
-		fmt.Println("  4) Delete config files")
-		fmt.Println("  5) Re-enable save prompt")
-		fmt.Println("  6) Back")
+		fmt.Println("  3) Toggle force — logout before auto-login")
+		fmt.Println("  4) Toggle bypass — bypass after auto-login")
+		fmt.Println("  5) Toggle kick-all (-a) — kick every session (needs bypass ON)")
+		fmt.Println("  6) Show config paths and redacted contents")
+		fmt.Println("  7) Delete config files")
+		fmt.Println("  8) Re-enable save prompt")
+		fmt.Println("  9) Back")
 		choice, err := readLine("> ")
 		if err != nil {
 			exitOnEOF(err)
@@ -516,22 +539,73 @@ func settingsMenu(rt *config.Runtime, client *srun.Client) {
 					continue
 				}
 			}
+			prev := rt.AutoAuth
+			rt.AutoAuth = !rt.AutoAuth
 			if noConfig {
-				rt.AutoAuth = !rt.AutoAuth
-				fmt.Printf("auto_auth is now %v (not written: --no-config)\n", rt.AutoAuth)
+				fmt.Printf("auto_auth is now %s (not written: --no-config)\n", onOff(rt.AutoAuth))
 				continue
 			}
 			syncClientCredentials(client, rt)
-			rt.AutoAuth = !rt.AutoAuth
-			if err := config.PersistRuntime(rt.Paths, *rt, cliFlags, rt.File); err != nil {
+			if err := saveRuntimeConfig(rt); err != nil {
+				rt.AutoAuth = prev
 				printErr(err)
-				rt.AutoAuth = !rt.AutoAuth
 				continue
 			}
-			fmt.Printf("auto_auth is now %v (saved)\n", rt.AutoAuth)
+			fmt.Printf("auto_auth is now %s (saved)\n", onOff(rt.AutoAuth))
 		case "3":
-			showConfigInfo(*rt)
+			prev := rt.Force
+			rt.Force = !rt.Force
+			if noConfig {
+				fmt.Printf("force is now %s (not written: --no-config)\n", onOff(rt.Force))
+				continue
+			}
+			if err := saveRuntimeConfig(rt); err != nil {
+				rt.Force = prev
+				printErr(err)
+				continue
+			}
+			fmt.Printf("force is now %s (saved)\n", onOff(rt.Force))
 		case "4":
+			prevB, prevA := rt.Bypass, rt.All
+			rt.Bypass = !rt.Bypass
+			if !rt.Bypass {
+				rt.All = false
+			}
+			if noConfig {
+				fmt.Printf("bypass is now %s, all is %s (not written: --no-config)\n", onOff(rt.Bypass), onOff(rt.All))
+				continue
+			}
+			if err := saveRuntimeConfig(rt); err != nil {
+				rt.Bypass, rt.All = prevB, prevA
+				printErr(err)
+				continue
+			}
+			fmt.Printf("bypass is now %s, all is %s (saved)\n", onOff(rt.Bypass), onOff(rt.All))
+		case "5":
+			if !rt.Bypass {
+				fmt.Println("Enable bypass (option 4) first; kick-all only applies with bypass.")
+				continue
+			}
+			if !rt.All {
+				if !confirm("Kick ALL sessions on this account during auto-bypass? Other devices will be disconnected.", false) {
+					continue
+				}
+			}
+			prev := rt.All
+			rt.All = !rt.All
+			if noConfig {
+				fmt.Printf("all is now %s (not written: --no-config)\n", onOff(rt.All))
+				continue
+			}
+			if err := saveRuntimeConfig(rt); err != nil {
+				rt.All = prev
+				printErr(err)
+				continue
+			}
+			fmt.Printf("all is now %s (saved)\n", onOff(rt.All))
+		case "6":
+			showConfigInfo(*rt)
+		case "7":
 			if rt.Paths.User == "" {
 				fmt.Println("User config path unavailable.")
 				break
@@ -551,16 +625,19 @@ func settingsMenu(rt *config.Runtime, client *srun.Client) {
 				rt.File = config.File{}
 				rt.SourcePath = ""
 				rt.AutoAuth = false
+				rt.Force = false
+				rt.Bypass = false
+				rt.All = false
 				rt.SavePromptDisabled = false
 			}
-		case "5":
+		case "8":
 			if err := config.ReenableSavePrompt(rt.Paths); err != nil {
 				printErr(err)
 			} else {
 				rt.SavePromptDisabled = false
 				fmt.Println("Save prompt re-enabled.")
 			}
-		case "6":
+		case "9":
 			return
 		}
 	}
