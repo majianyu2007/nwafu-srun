@@ -305,8 +305,20 @@ func (c *Client) LogIn() (*LoginInfo, error) {
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) > 1 && matches[1] == "ok" {
 		sleep(LoginSettleDelay)
-		info, err := c.GetLoginInfo()
-		return info, err
+		var lastErr error
+		for i := 0; i < LoginInfoRetry; i++ {
+			info, infoErr := c.GetLoginInfo()
+			if infoErr == nil {
+				return info, nil
+			}
+			lastErr = infoErr
+			if errors.Is(infoErr, ErrNotOnline) {
+				sleep(LoginInfoRetryGap)
+				continue
+			}
+			return nil, infoErr
+		}
+		return nil, lastErr
 	}
 
 	errMsg := parsePortalError(string(body), matches)
@@ -407,12 +419,21 @@ func parseLoginInfo(strLoginInfo, ip string) (*LoginInfo, error) {
 
 // FormatLoginInfo returns a human-readable status block.
 func FormatLoginInfo(info *LoginInfo) string {
+	return formatLoginInfo(info, "Login successfully")
+}
+
+// FormatStatusInfo returns a human-readable status block for status query.
+func FormatStatusInfo(info *LoginInfo) string {
+	return formatLoginInfo(info, "Current online status")
+}
+
+func formatLoginInfo(info *LoginInfo, title string) string {
 	if info == nil {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("\n-----------------------------------------\n")
-	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "Login successfully", ""))
+	b.WriteString(fmt.Sprintf("%-20s-%20s\n", title, ""))
 	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "     User name", info.Username))
 	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "            IP", info.IP))
 	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "       Balance", info.Balance))

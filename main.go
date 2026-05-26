@@ -252,15 +252,16 @@ func askSaveCredentials(rt config.Runtime, client *srun.Client) {
 	}
 
 	fmt.Println("\nSave these credentials for auto-login next time?")
-	fmt.Println("  [y] Yes   [n] No (this time)   [N] Never ask again")
+	fmt.Println("  [y] Yes   [n] No (this time)   [never] Never ask again")
 	ans, err := readLine("> ")
 	if err != nil {
 		return
 	}
-	switch strings.ToLower(ans) {
+	raw := strings.TrimSpace(ans)
+	switch strings.ToLower(raw) {
 	case "n", "no", "":
 		return
-	case "never", "N":
+	case "never":
 		if err := config.SaveNeverAskMarker(rt.Paths); err != nil {
 			fmt.Fprintf(os.Stderr, "Could not save preference: %v\n", err)
 		} else {
@@ -465,7 +466,7 @@ func interactiveRun(rt config.Runtime) {
 				printErr(err)
 				continue
 			}
-			fmt.Print(srun.FormatLoginInfo(info))
+			fmt.Print(srun.FormatStatusInfo(info))
 		case "5":
 			if client.MAC == "" {
 				if info, err := client.GetLoginInfo(); err == nil {

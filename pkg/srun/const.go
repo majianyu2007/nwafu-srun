@@ -26,6 +26,8 @@ const (
 	LoginSettleDelay  = 1 * time.Second
 	LogoutSettleDelay = 3 * time.Second
 	BypassCheckDelay  = 2 * time.Second
+	LoginInfoRetry    = 5
+	LoginInfoRetryGap = 500 * time.Millisecond
 
 	// Env
 	EnvUsername = "NWAFU_SRUN_USERNAME"
