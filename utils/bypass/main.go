@@ -187,7 +187,11 @@ func main() {
 	if err != nil {
 		fail(exitRuntime, err)
 	}
-	fmt.Printf("Kicked %d sessions with random fake MACs.\n", kicked)
+	if kicked == 1 {
+		fmt.Println("Kicked 1 session with random fake MACs.")
+	} else {
+		fmt.Printf("Kicked %d sessions with random fake MACs.\n", kicked)
+	}
 
 	if len(sessions) == 0 {
 		fmt.Println("No sessions visible after kick. Device should reconnect shortly.")

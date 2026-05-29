@@ -419,7 +419,11 @@ func runBypass(client *srun.Client, kickAll bool) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Kicked %d sessions with random fake MACs.\n", kicked)
+	if kicked == 1 {
+		fmt.Println("Kicked 1 session with random fake MACs.")
+	} else {
+		fmt.Printf("Kicked %d sessions with random fake MACs.\n", kicked)
+	}
 
 	if len(sessions) == 0 {
 		fmt.Println("No sessions visible after kick. Device should reconnect shortly.")
@@ -881,7 +885,11 @@ func runManageSessions(client *srun.Client) error {
 					kickedCount++
 				}
 			}
-			fmt.Printf("Kicked %d of %d sessions.\n", kickedCount, len(sessions))
+			if len(sessions) == 1 {
+				fmt.Printf("Kicked %d of 1 session.\n", kickedCount)
+			} else {
+				fmt.Printf("Kicked %d of %d sessions.\n", kickedCount, len(sessions))
+			}
 			break
 		}
 
