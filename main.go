@@ -65,7 +65,7 @@ func init() {
 	flag.BoolVar(&force, "force", false, "Logout before login")
 	flag.BoolVar(&bypass, "b", false, "Bypass billing after login")
 	flag.BoolVar(&bypass, "bypass", false, "Bypass billing")
-	flag.BoolVar(&all, "a", false, "Kick ALL sessions on the account during bypass (required for the bypass to actually take effect)")
+	flag.BoolVar(&all, "a", false, "Kick ALL sessions on the account during bypass")
 	flag.BoolVar(&all, "all", false, "Kick ALL sessions on the account during bypass")
 	flag.StringVar(&acid, "acid", "1", "Access controller ID (ac_id)")
 	flag.BoolVar(&verbose, "v", false, "Verbose output (stderr)")
@@ -93,7 +93,7 @@ func guide(argv string) {
 	fmt.Printf("  -u, -p           Credentials (or env %s / %s)\n", srun.EnvUsername, srun.EnvPassword)
 	fmt.Printf("  -f               Logout before login\n")
 	fmt.Printf("  -b               Bypass billing after login (kicks own MAC only by default)\n")
-	fmt.Printf("  -a               With -b: kick ALL sessions on the account (needed for bypass to take effect)\n")
+	fmt.Printf("  -a               With -b: kick ALL sessions on the account\n")
 	fmt.Printf("  --acid, -v, -h   See README\n")
 	fmt.Printf("\nWith a saved config (auto_auth=true), running with no args performs auto-login.\n")
 }
@@ -403,9 +403,8 @@ func newClient(rt config.Runtime) *srun.Client {
 // likely to trigger the accounting desync because partial kicks may leave
 // some sessions intact.
 //
-// kickAll == true: kick every session under the account. Most reliable for
-// the bypass to actually take effect; also clears any other devices/users
-// on the same account.
+// kickAll == true: kick every session under the account. Can be more reliable
+// and also clears any other devices/users on the same account.
 func runBypass(client *srun.Client, kickAll bool) error {
 	fmt.Println("\n--- Bypass Mode ---")
 	macFilter := client.MAC
@@ -1006,9 +1005,8 @@ func interactiveRun(rt *config.Runtime) {
 					fmt.Fprintf(os.Stderr, "Warning: could not refresh MAC: %v\n", err)
 				}
 			}
-			fmt.Println("Bypass requires kicking every session under the account at once")
-			fmt.Println("for the RADIUS accounting desync to take effect. The default kicks")
-			fmt.Println("only this device, which is safer if the account is shared.")
+			fmt.Println("Bypass kicks your current device's session by default.")
+			fmt.Println("To kick every session under the account instead, use the kick-all (-a) flag.")
 			kickAll := confirm("Kick ALL sessions on this account?", false)
 			if err := runBypass(client, kickAll); err != nil {
 				printErr(err)

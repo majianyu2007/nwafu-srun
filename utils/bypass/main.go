@@ -40,7 +40,7 @@ func init() {
 	flag.StringVar(&password, "p", "", "Password (required with --login)")
 	flag.StringVar(&password, "password", "", "Password")
 	flag.BoolVar(&loginFirst, "login", false, "Full flow: logout, login, then bypass")
-	flag.BoolVar(&all, "a", false, "Kick ALL sessions on the account (required for the bypass to actually take effect)")
+	flag.BoolVar(&all, "a", false, "Kick ALL sessions on the account")
 	flag.BoolVar(&all, "all", false, "Kick ALL sessions on the account")
 	flag.StringVar(&acid, "acid", "1", "Access controller ID (--login only)")
 	flag.BoolVar(&verbose, "v", false, "Verbose output (stderr)")
@@ -57,9 +57,9 @@ func guide(argv string) {
 	fmt.Printf("  %s -u <user> -p <pass> --login\n", argv)
 	fmt.Printf("  %s                            # username from config if saved\n", argv)
 	fmt.Printf("\nOptions: -u -p --login -a -v --config --no-config -h\n")
-	fmt.Printf("By default only sessions matching this device's MAC are kicked. Use -a/--all\n")
-	fmt.Printf("to kick every session under the account, which is required for the RADIUS\n")
-	fmt.Printf("accounting desync to actually take effect (also clears any other devices).\n")
+	fmt.Printf("  -a         Kick ALL sessions on the account. By default, only sessions\n")
+	fmt.Printf("             matching this device's MAC are kicked. Kicking all can be more\n")
+	fmt.Printf("             reliable but also clears any other devices.\n")
 	fmt.Printf("Environment: %s, %s\n", srun.EnvUsername, srun.EnvPassword)
 }
 

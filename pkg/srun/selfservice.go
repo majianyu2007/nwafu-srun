@@ -367,10 +367,9 @@ func (s *SelfServiceClient) KickAllByMAC(myMAC string) (int, error) {
 
 // RunBypass executes SSO + fake-MAC kick + optional session check.
 //
-// macFilter == "" kicks every session under the account (required for the
-// RADIUS accounting desync to actually take effect, but also clears any
-// other devices on the same account). A non-empty macFilter only kicks
-// sessions matching that MAC.
+// macFilter == "" kicks every session under the account (can be more reliable,
+// but also clears any other devices on the same account). A non-empty
+// macFilter only kicks sessions matching that MAC.
 func RunBypass(username string, macFilter string, verbose bool, checkAfter bool) (int, []sessionInfo, error) {
 	ss := NewSelfServiceClient()
 	ss.SetVerbose(verbose)
