@@ -396,7 +396,7 @@ func newClient(rt config.Runtime) *srun.Client {
 	return c
 }
 
-// runBypass kicks sessions with random fake MACs to bypass billing.
+// runBypass kicks sessions with a fixed fake MAC to bypass billing.
 //
 // kickAll == false (default): only sessions matching this device's MAC are
 // kicked. Safer when the account is shared with other people but is less
@@ -420,9 +420,9 @@ func runBypass(client *srun.Client, kickAll bool) error {
 		return err
 	}
 	if kicked == 1 {
-		fmt.Println("Kicked 1 session with random fake MACs.")
+		fmt.Println("Kicked 1 session with a fake MAC.")
 	} else {
-		fmt.Printf("Kicked %d sessions with random fake MACs.\n", kicked)
+		fmt.Printf("Kicked %d sessions with a fake MAC.\n", kicked)
 	}
 
 	if len(sessions) == 0 {

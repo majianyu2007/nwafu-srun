@@ -188,9 +188,9 @@ func main() {
 		fail(exitRuntime, err)
 	}
 	if kicked == 1 {
-		fmt.Println("Kicked 1 session with random fake MACs.")
+		fmt.Println("Kicked 1 session with a fake MAC.")
 	} else {
-		fmt.Printf("Kicked %d sessions with random fake MACs.\n", kicked)
+		fmt.Printf("Kicked %d sessions with a fake MAC.\n", kicked)
 	}
 
 	if len(sessions) == 0 {

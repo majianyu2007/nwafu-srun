@@ -253,13 +253,11 @@ func (s *SelfServiceClient) KickSession(id, mac string, csrf *csrfInfo) error {
 // it to any real device, triggering the accounting desync.
 const fakeMAC = "02:00:00:00:00:00"
 
-// KickAllWithFakeMAC kicks sessions using random fake MACs.
+// KickAllWithFakeMAC kicks sessions using a fixed fake MAC.
 // If myMAC is non-empty, only sessions matching that MAC are kicked.
 //
-// Each session is kicked with its own freshly generated random MAC. This
-// matches the bypass behavior that has been observed to actually trigger the
-// Srun accounting desync at NWAFU, so do not "optimize" this into one shared
-// MAC for the whole batch.
+// Each session is kicked with the fixed invalid MAC (02:00:00:00:00:00)
+// to trigger the Srun accounting desync.
 func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 	csrf, sessions, err := s.GetSessions()
 	if err != nil {
