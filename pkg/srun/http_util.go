@@ -1,7 +1,9 @@
 package srun
 
 import (
+	"context"
 	"crypto/tls"
+	"io"
 	"net/http"
 	"time"
 )
@@ -53,8 +55,26 @@ func probeURL(client *http.Client, url string) bool {
 	return resp.StatusCode < 400
 }
 
-// Sleep is a test hook for delays (defaults to time.Sleep).
-var Sleep = time.Sleep
+// sleepFn is a test hook for delays (defaults to time.Sleep).
+var sleepFn = time.Sleep
 
-// sleep is used internally; tests may override Sleep.
-func sleep(d time.Duration) { Sleep(d) }
+// sleep is used internally; tests may override sleepFn.
+func sleep(d time.Duration) { sleepFn(d) }
+
+// doRequest wraps http.NewRequestWithContext, sets User-Agent, logs the request, and executes it.
+func doRequest(client *http.Client, ctx context.Context, method, urlStr string, extraHeaders map[string]string, body io.Reader, log logger) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, urlStr, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", DefaultUserAgent)
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
+	log.Debugf("%s %s", method, redactSensitive(urlStr))
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}

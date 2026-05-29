@@ -57,16 +57,3 @@ func TestHintTUNProxySymptoms(t *testing.T) {
 		}
 	}
 }
-
-func TestFormatError(t *testing.T) {
-	s := FormatError(ErrSSORedirectedToLogin)
-	if s == "" {
-		t.Fatal("empty format")
-	}
-	if Hint(ErrSSORedirectedToLogin) != "" && !errors.Is(fmt.Errorf("%s", s), ErrSSORedirectedToLogin) {
-		// FormatError should mention hint when available
-		if len(s) < 20 {
-			t.Fatalf("format too short: %q", s)
-		}
-	}
-}

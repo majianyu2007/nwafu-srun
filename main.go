@@ -8,9 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"golang.org/x/term"
 
@@ -39,11 +40,20 @@ var (
 	configPath string
 	noConfig   bool
 	saveConfig bool
+	menu       bool
+	logoutMode string
 )
 
 var (
 	cfgRuntime config.Runtime
 	cliFlags   config.CLIFlags
+)
+
+var (
+	cachedConfigStr string
+	cachedStatusStr string
+	cacheTime       time.Time
+	cacheTTL        = 10 * time.Second
 )
 
 func init() {
@@ -65,6 +75,9 @@ func init() {
 	flag.StringVar(&configPath, "config", "", "Path to config file")
 	flag.BoolVar(&noConfig, "no-config", false, "Ignore all config files")
 	flag.BoolVar(&saveConfig, "save-config", false, "Save current flags to user config dir and exit")
+	flag.BoolVar(&menu, "m", false, "Force interactive menu mode")
+	flag.BoolVar(&menu, "menu", false, "Force interactive menu mode")
+	flag.StringVar(&logoutMode, "logout-mode", "", "Logout mode: portal or selfservice")
 }
 
 func guide(argv string) {
@@ -85,14 +98,103 @@ func guide(argv string) {
 	fmt.Printf("\nWith a saved config (auto_auth=true), running with no args performs auto-login.\n")
 }
 
-func formatCenter(s string, width int) string {
-	n := utf8.RuneCountInString(s)
-	if n >= width {
-		return s
+const (
+	colorReset    = "\033[0m"
+	colorBoldRed  = "\033[1;31m"
+	colorBoldGreen = "\033[1;32m"
+	colorBoldCyan = "\033[1;36m"
+)
+
+var ansiRe = regexp.MustCompile(`\033\[[0-9;]*m`)
+
+func displayWidth(s string) int {
+	clean := ansiRe.ReplaceAllString(s, "")
+	w := 0
+	for _, r := range clean {
+		if r > 127 {
+			w += 2
+		} else {
+			w += 1
+		}
 	}
-	leftPad := (width - n) / 2
-	rightPad := width - n - leftPad
-	return strings.Repeat(" ", leftPad) + s + strings.Repeat(" ", rightPad)
+	return w
+}
+
+func printBoxLine(leftText string, rightText string, width int) {
+	wLeft := displayWidth(leftText)
+	wRight := displayWidth(rightText)
+	padding := width - wLeft - wRight - 2
+	if padding < 0 {
+		padding = 0
+	}
+	fmt.Printf("%s│%s %s%s%s %s│%s\n",
+		colorBoldCyan,
+		colorReset,
+		leftText,
+		strings.Repeat(" ", padding),
+		rightText,
+		colorBoldCyan,
+		colorReset,
+	)
+}
+
+func badge(v bool) string {
+	if v {
+		return "[" + colorBoldGreen + " ON " + colorReset + "]"
+	}
+	return "[" + colorBoldRed + " OFF " + colorReset + "]"
+}
+
+var interruptChan chan struct{}
+
+func startInterruptMonitor() {
+	interruptChan = make(chan struct{}, 1)
+	go func() {
+		_, _ = stdin.ReadString('\n')
+		interruptChan <- struct{}{}
+	}()
+}
+
+func checkInterrupt() bool {
+	fmt.Print("Press Enter within 2 seconds to enter interactive menu...")
+	select {
+	case <-interruptChan:
+		fmt.Println("Interrupting auto-login...")
+		return true
+	case <-time.After(2 * time.Second):
+		fmt.Println()
+		return false
+	}
+}
+
+func getStatusHeader(client *srun.Client, rt *config.Runtime) (string, string) {
+	configStr := fmt.Sprintf("User: %s | Auto: %s | Bypass: %s",
+		rt.Username,
+		onOff(rt.AutoAuth),
+		onOff(rt.Bypass),
+	)
+
+	if time.Since(cacheTime) < cacheTTL {
+		return configStr, cachedStatusStr
+	}
+
+	info, err := client.GetLoginInfo()
+	var statusStr string
+	if err == nil {
+		statusStr = fmt.Sprintf("Status: Online | IP: %s | Balance: %s", info.IP, info.Balance)
+	} else if errors.Is(err, srun.ErrNotOnline) {
+		statusStr = "Status: Offline"
+	} else {
+		statusStr = "Status: Check failed (Off-campus?)"
+	}
+
+	cachedStatusStr = statusStr
+	cacheTime = time.Now()
+	return configStr, statusStr
+}
+
+func invalidateStatusCache() {
+	cacheTime = time.Time{}
 }
 
 func fail(code int, msg string, args ...any) {
@@ -144,15 +246,8 @@ func readPassword(prompt string) (string, error) {
 	return string(b), nil
 }
 
-const menuInnerWidth = 44
+const menuInnerWidth = 60
 
-func boxLine(text string) string {
-	n := utf8.RuneCountInString(text)
-	if n >= menuInnerWidth {
-		return "│" + text + "│"
-	}
-	return "│" + text + strings.Repeat(" ", menuInnerWidth-n) + "│"
-}
 
 func confirm(prompt string, defaultYes bool) bool {
 	def := "n"
@@ -175,9 +270,10 @@ func syncClientCredentials(client *srun.Client, rt *config.Runtime) {
 	client.Username = rt.Username
 	client.Password = rt.Password
 	client.AcID = rt.AcID
+	client.LogoutMode = rt.LogoutMode
 }
 
-func promptCredentials(rt *config.Runtime) error {
+func promptUsername(rt *config.Runtime) error {
 	if rt.Username == "" {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return fmt.Errorf("username required via -u or %s when stdin is not a TTY", srun.EnvUsername)
@@ -187,11 +283,17 @@ func promptCredentials(rt *config.Runtime) error {
 		if err != nil {
 			return err
 		}
-		u = strings.TrimSpace(u)
 		if u == "" {
 			return errors.New("username required")
 		}
 		rt.Username = u
+	}
+	return nil
+}
+
+func promptCredentials(rt *config.Runtime) error {
+	if err := promptUsername(rt); err != nil {
+		return err
 	}
 	if rt.Password == "" {
 		p, err := readPassword("Password: ")
@@ -238,6 +340,19 @@ func changeCredentials(rt *config.Runtime, client *srun.Client) {
 	}
 	syncClientCredentials(client, rt)
 	fmt.Println("Credentials updated for this session.")
+	if confirm("Save new credentials to config file?", true) {
+		path := config.DefaultPath(rt.Paths)
+		if err := warnPlaintextSave(path); err == nil {
+			f := config.FileForPersist(*rt, cliFlags, rt.File)
+			if err := config.Save(path, &f); err != nil {
+				printErr(err)
+			} else {
+				rt.File = f
+				rt.SourcePath = path
+				fmt.Printf("Config saved to %s\n", path)
+			}
+		}
+	}
 }
 
 func captureCLIFlags() config.CLIFlags {
@@ -262,6 +377,9 @@ func captureCLIFlags() config.CLIFlags {
 		case "a", "all":
 			f.AllSet = true
 			f.All = all
+		case "logout-mode":
+			f.LogoutModeSet = true
+			f.LogoutMode = logoutMode
 		}
 	})
 	return f
@@ -274,6 +392,7 @@ func mergedRuntime() config.Runtime {
 func newClient(rt config.Runtime) *srun.Client {
 	c := srun.NewClient(rt.Username, rt.Password, rt.AcID)
 	c.SetVerbose(verbose)
+	c.LogoutMode = rt.LogoutMode
 	return c
 }
 
@@ -315,8 +434,8 @@ func runBypass(client *srun.Client, kickAll bool) error {
 			fmt.Printf("  id=%s mac=%s%s\n", sess.ID, sess.MAC, tag)
 		}
 		if !kickAll {
-			fmt.Println("Note: only your own MAC was kicked. To trigger the accounting desync,")
-			fmt.Println("      every session under the account must be kicked at once (use -a).")
+			fmt.Println("Note: only the middle session of your device's MAC was kicked to bypass billing.")
+			fmt.Println("      To kick every session under the account, use -a.")
 		} else {
 			fmt.Println("Tip: newly created session(s) are typically NOT billed.")
 		}
@@ -325,7 +444,7 @@ func runBypass(client *srun.Client, kickAll bool) error {
 	return nil
 }
 
-func nonInteractiveRun(rt config.Runtime) {
+func nonInteractiveRun(rt config.Runtime) error {
 	client := newClient(rt)
 
 	if rt.Force {
@@ -337,17 +456,16 @@ func nonInteractiveRun(rt config.Runtime) {
 
 	info, err := client.LogIn()
 	if err != nil {
-		printErr(err)
-		os.Exit(exitRuntime)
+		return err
 	}
 	fmt.Print(srun.FormatLoginInfo(info))
 
 	if rt.Bypass {
 		if err := runBypass(client, rt.All); err != nil {
-			printErr(err)
-			os.Exit(exitRuntime)
+			return err
 		}
 	}
+	return nil
 }
 
 func warnPlaintextSave(path string) error {
@@ -470,9 +588,9 @@ func printLoginOutcome(info *srun.LoginInfo, err error) {
 
 func onOff(v bool) string {
 	if v {
-		return "ON"
+		return colorBoldGreen + "ON" + colorReset
 	}
-	return "OFF"
+	return colorBoldRed + "OFF" + colorReset
 }
 
 // saveRuntimeConfig writes rt to the user config file (pipeline flags from rt.File).
@@ -491,20 +609,43 @@ func saveRuntimeConfig(rt *config.Runtime) error {
 	return nil
 }
 
+func logoutModeDisplay(mode string) string {
+	if mode == "selfservice" {
+		return "selfservice"
+	}
+	return "portal"
+}
+
+func logoutModeBadge(mode string) string {
+	if mode == "selfservice" {
+		return "[" + colorBoldCyan + " selfservice " + colorReset + "]"
+	}
+	return "[" + colorBoldGreen + " portal " + colorReset + "]"
+}
+
 func settingsMenu(rt *config.Runtime, client *srun.Client) {
 	for {
-		fmt.Printf("\n--- Settings (auto-auth: %s | force: %s | bypass: %s | all: %s) ---\n",
-			onOff(rt.AutoAuth), onOff(rt.Force), onOff(rt.Bypass), onOff(rt.All))
-		fmt.Println("  1) Save current credentials as config")
-		fmt.Println("  2) Toggle auto-auth (saved immediately)")
-		fmt.Println("  3) Toggle force — logout before auto-login")
-		fmt.Println("  4) Toggle bypass — bypass after auto-login")
-		fmt.Println("  5) Toggle kick-all (-a) — kick every session (needs bypass ON)")
-		fmt.Println("  6) Show config paths and redacted contents")
-		fmt.Println("  7) Delete config files")
-		fmt.Println("  8) Re-enable save prompt")
-		fmt.Println("  9) Back")
-		choice, err := readLine("> ")
+		fmt.Println("\n" + colorBoldCyan + "┌" + strings.Repeat("─", menuInnerWidth) + "┐" + colorReset)
+		printBoxLine("   Settings & Configuration", "", menuInnerWidth)
+		fmt.Println(colorBoldCyan + "├" + strings.Repeat("─", menuInnerWidth) + "┤" + colorReset)
+		printBoxLine("  Auto-Auth  : ", badge(rt.AutoAuth), menuInnerWidth)
+		printBoxLine("  Force      : ", badge(rt.Force), menuInnerWidth)
+		printBoxLine("  Bypass     : ", badge(rt.Bypass), menuInnerWidth)
+		printBoxLine("  Kick-All   : ", badge(rt.All), menuInnerWidth)
+		printBoxLine("  Logout-Mode: ", logoutModeBadge(rt.LogoutMode), menuInnerWidth)
+		fmt.Println(colorBoldCyan + "├" + strings.Repeat("─", menuInnerWidth) + "┤" + colorReset)
+		printBoxLine("  1) Save current credentials as config", "", menuInnerWidth)
+		printBoxLine("  2) Toggle auto-auth (saved immediately)", "", menuInnerWidth)
+		printBoxLine("  3) Toggle force (logout before auto-login)", "", menuInnerWidth)
+		printBoxLine("  4) Toggle bypass (bypass after auto-login)", "", menuInnerWidth)
+		printBoxLine("  5) Toggle kick-all (-a) (bypass all devices)", "", menuInnerWidth)
+		printBoxLine("  6) Toggle logout mode (portal / selfservice)", "", menuInnerWidth)
+		printBoxLine("  7) Show config paths and redacted contents", "", menuInnerWidth)
+		printBoxLine("  8) Delete config files", "", menuInnerWidth)
+		printBoxLine("  9) Re-enable save prompt", "", menuInnerWidth)
+		printBoxLine("  0) Back", "", menuInnerWidth)
+		fmt.Println(colorBoldCyan + "└" + strings.Repeat("─", menuInnerWidth) + "┘" + colorReset)
+		choice, err := readLine("Select an option [0-9]: ")
 		if err != nil {
 			exitOnEOF(err)
 			return
@@ -604,8 +745,26 @@ func settingsMenu(rt *config.Runtime, client *srun.Client) {
 			}
 			fmt.Printf("all is now %s (saved)\n", onOff(rt.All))
 		case "6":
-			showConfigInfo(*rt)
+			prev := rt.LogoutMode
+			if rt.LogoutMode == "selfservice" {
+				rt.LogoutMode = "portal"
+			} else {
+				rt.LogoutMode = "selfservice"
+			}
+			if noConfig {
+				fmt.Printf("logout_mode is now %s (not written: --no-config)\n", logoutModeDisplay(rt.LogoutMode))
+				continue
+			}
+			syncClientCredentials(client, rt)
+			if err := saveRuntimeConfig(rt); err != nil {
+				rt.LogoutMode = prev
+				printErr(err)
+				continue
+			}
+			fmt.Printf("logout_mode is now %s (saved)\n", logoutModeDisplay(rt.LogoutMode))
 		case "7":
+			showConfigInfo(*rt)
+		case "8":
 			if rt.Paths.User == "" {
 				fmt.Println("User config path unavailable.")
 				break
@@ -628,16 +787,17 @@ func settingsMenu(rt *config.Runtime, client *srun.Client) {
 				rt.Force = false
 				rt.Bypass = false
 				rt.All = false
+				rt.LogoutMode = ""
 				rt.SavePromptDisabled = false
 			}
-		case "8":
+		case "9":
 			if err := config.ReenableSavePrompt(rt.Paths); err != nil {
 				printErr(err)
 			} else {
 				rt.SavePromptDisabled = false
 				fmt.Println("Save prompt re-enabled.")
 			}
-		case "9":
+		case "0", "q", "quit", "exit", "back":
 			return
 		}
 	}
@@ -661,41 +821,114 @@ func showConfigInfo(rt config.Runtime) {
 	}
 }
 
-func interactiveRun(rt *config.Runtime) {
-	if err := promptCredentials(rt); err != nil {
-		fail(exitUsage, "%v", err)
-	}
+func runManageSessions(client *srun.Client) error {
+	fmt.Println("\n--- Manage Active Sessions ---")
+	ss := srun.NewSelfServiceClient()
+	ss.SetVerbose(verbose)
 
-	client := newClient(*rt)
-
-	if confirm("\nLog in now? (recommended; verifies credentials and offers to save them)", true) {
-		info, err := loginWithOnlineCheck(client, false)
-		if err != nil && !errors.Is(err, srun.ErrStayOnline) {
-			printErr(err)
-			fmt.Fprintln(os.Stderr, "Retry from menu (1), change credentials (7), or exit (8).")
-		} else {
-			printLoginOutcome(info, err)
-			if err == nil {
-				askSaveCredentials(rt, client)
-			}
-		}
+	fmt.Println("Connecting to self-service portal...")
+	if err := ss.SSOLogin(client.Username); err != nil {
+		return fmt.Errorf("SSO login failed: %w", err)
 	}
 
 	for {
-		fmt.Println("\n┌" + strings.Repeat("─", menuInnerWidth) + "┐")
-		fmt.Println(boxLine("      NWAFU SRUN Authentication Utility"))
-		fmt.Println("├" + strings.Repeat("─", menuInnerWidth) + "┤")
-		fmt.Println(boxLine("  1) Login"))
-		fmt.Println(boxLine("  2) Force re-login"))
-		fmt.Println(boxLine("  3) Logout"))
-		fmt.Println(boxLine("  4) Status"))
-		fmt.Println(boxLine("  5) Bypass billing"))
-		fmt.Println(boxLine("  6) Settings"))
-		fmt.Println(boxLine("  7) Change credentials"))
-		fmt.Println(boxLine("  8) Exit"))
-		fmt.Println("└" + strings.Repeat("─", menuInnerWidth) + "┘")
+		fmt.Println("Fetching active sessions...")
+		csrf, sessions, err := ss.GetSessions()
+		if err != nil {
+			return fmt.Errorf("failed to fetch sessions: %w", err)
+		}
 
-		command, err := readLine("Select an option [1-8]: ")
+		if len(sessions) == 0 {
+			fmt.Println("No active sessions found.")
+			break
+		}
+
+		fmt.Printf("\nActive sessions under account %s:\n", client.Username)
+		for i, sess := range sessions {
+			tag := ""
+			if client.MAC != "" && srun.MACEqual(sess.MAC, client.MAC) {
+				tag = " (your current device)"
+			}
+			fmt.Printf("  %d) ID: %s | MAC: %s%s\n", i+1, sess.ID, sess.MAC, tag)
+		}
+
+		fmt.Println("\nOptions:")
+		fmt.Println("  [1-N]  Enter session number to kick that session")
+		fmt.Println("  all    Kick ALL sessions listed above")
+		fmt.Println("  0      Back to main menu")
+
+		input, err := readLine("\nChoose an option: ")
+		if err != nil {
+			return err
+		}
+
+		input = strings.TrimSpace(strings.ToLower(input))
+		if input == "0" || input == "back" || input == "q" || input == "quit" || input == "exit" {
+			break
+		}
+
+		if input == "all" {
+			if !confirm("Are you sure you want to kick ALL active sessions?", false) {
+				continue
+			}
+			fmt.Println("Kicking all sessions...")
+			kickedCount := 0
+			for _, sess := range sessions {
+				fmt.Printf("Kicking session %s (MAC: %s)... ", sess.ID, sess.MAC)
+				if err := ss.KickSession(sess.ID, sess.MAC, csrf); err != nil {
+					fmt.Printf("Failed: %v\n", err)
+				} else {
+					fmt.Println("Success")
+					kickedCount++
+				}
+			}
+			fmt.Printf("Kicked %d of %d sessions.\n", kickedCount, len(sessions))
+			break
+		}
+
+		idx, err := strconv.Atoi(input)
+		if err != nil || idx < 1 || idx > len(sessions) {
+			fmt.Printf("Invalid option: %s. Enter a number between 1 and %d, 'all', or '0'.\n", input, len(sessions))
+			continue
+		}
+
+		targetSess := sessions[idx-1]
+		fmt.Printf("Kicking session %s (MAC: %s)... ", targetSess.ID, targetSess.MAC)
+		if err := ss.KickSession(targetSess.ID, targetSess.MAC, csrf); err != nil {
+			fmt.Printf("Failed: %v\n", err)
+		} else {
+			fmt.Println("Success")
+		}
+	}
+
+	fmt.Println("--- Session Management Complete ---")
+	return nil
+}
+
+func interactiveRun(rt *config.Runtime) {
+	client := newClient(*rt)
+
+	for {
+		configStr, statusStr := getStatusHeader(client, rt)
+
+		fmt.Println("\n" + colorBoldCyan + "┌" + strings.Repeat("─", menuInnerWidth) + "┐" + colorReset)
+		printBoxLine("     NWAFU SRUN Portal Client", "", menuInnerWidth)
+		fmt.Println(colorBoldCyan + "├" + strings.Repeat("─", menuInnerWidth) + "┤" + colorReset)
+		printBoxLine("  "+configStr, "", menuInnerWidth)
+		printBoxLine("  "+statusStr, "", menuInnerWidth)
+		fmt.Println(colorBoldCyan + "├" + strings.Repeat("─", menuInnerWidth) + "┤" + colorReset)
+		printBoxLine("  1) Login", "", menuInnerWidth)
+		printBoxLine("  2) Force re-login", "", menuInnerWidth)
+		printBoxLine("  3) Logout", "", menuInnerWidth)
+		printBoxLine("  4) Status", "", menuInnerWidth)
+		printBoxLine("  5) Bypass billing", "", menuInnerWidth)
+		printBoxLine("  6) Manage active sessions", "", menuInnerWidth)
+		printBoxLine("  7) Settings", "", menuInnerWidth)
+		printBoxLine("  8) Change credentials", "", menuInnerWidth)
+		printBoxLine("  0) Exit", "", menuInnerWidth)
+		fmt.Println(colorBoldCyan + "└" + strings.Repeat("─", menuInnerWidth) + "┘" + colorReset)
+
+		command, err := readLine("Select an option [0-8]: ")
 		if err != nil {
 			exitOnEOF(err)
 			continue
@@ -703,6 +936,10 @@ func interactiveRun(rt *config.Runtime) {
 
 		switch command {
 		case "1":
+			if err := promptCredentials(rt); err != nil {
+				printErr(err)
+				continue
+			}
 			syncClientCredentials(client, rt)
 			info, err := loginWithOnlineCheck(client, false)
 			if err != nil && !errors.Is(err, srun.ErrStayOnline) {
@@ -710,10 +947,15 @@ func interactiveRun(rt *config.Runtime) {
 				continue
 			}
 			printLoginOutcome(info, err)
+			invalidateStatusCache()
 			if err == nil {
 				askSaveCredentials(rt, client)
 			}
 		case "2":
+			if err := promptCredentials(rt); err != nil {
+				printErr(err)
+				continue
+			}
 			syncClientCredentials(client, rt)
 			info, err := loginWithOnlineCheck(client, true)
 			if err != nil {
@@ -721,8 +963,19 @@ func interactiveRun(rt *config.Runtime) {
 				continue
 			}
 			printLoginOutcome(info, nil)
+			invalidateStatusCache()
 			askSaveCredentials(rt, client)
 		case "3":
+			if err := promptUsername(rt); err != nil {
+				printErr(err)
+				continue
+			}
+			syncClientCredentials(client, rt)
+			if client.LogoutMode == "selfservice" {
+				fmt.Println("Using self-service logout (kicking MAC sessions)...")
+			} else {
+				fmt.Println("Using portal logout...")
+			}
 			if err := client.LogOut(); err != nil {
 				fmt.Println("-----------------------------------------")
 				fmt.Println("             Fail to logout              ")
@@ -733,6 +986,7 @@ func interactiveRun(rt *config.Runtime) {
 				fmt.Println("           Logout successfully           ")
 				fmt.Println("-----------------------------------------")
 			}
+			invalidateStatusCache()
 		case "4":
 			info, err := client.GetLoginInfo()
 			if err != nil {
@@ -740,7 +994,12 @@ func interactiveRun(rt *config.Runtime) {
 				continue
 			}
 			fmt.Print(srun.FormatStatusInfo(info))
+			invalidateStatusCache()
 		case "5":
+			if err := promptCredentials(rt); err != nil {
+				printErr(err)
+				continue
+			}
 			syncClientCredentials(client, rt)
 			if client.MAC == "" {
 				if _, err := client.GetLoginInfo(); err != nil && verbose {
@@ -755,14 +1014,25 @@ func interactiveRun(rt *config.Runtime) {
 				printErr(err)
 				continue
 			}
+			invalidateStatusCache()
 		case "6":
-			settingsMenu(rt, client)
+			if err := promptCredentials(rt); err != nil {
+				printErr(err)
+				continue
+			}
+			syncClientCredentials(client, rt)
+			if err := runManageSessions(client); err != nil {
+				printErr(err)
+			}
+			invalidateStatusCache()
 		case "7":
+			settingsMenu(rt, client)
+		case "8":
 			changeCredentials(rt, client)
-		case "8", "q", "quit", "exit":
+		case "0", "q", "quit", "exit":
 			os.Exit(exitOK)
 		default:
-			fmt.Println("Invalid input. Please enter a number between 1 and 8.")
+			fmt.Println("Invalid input. Please enter a number between 0 and 8.")
 		}
 	}
 }
@@ -782,24 +1052,6 @@ func doSaveConfig(rt config.Runtime) {
 		fail(exitRuntime, "save config: %v", err)
 	}
 	fmt.Printf("Config saved to %s\n", path)
-}
-
-func warnAutoAuthPipeline(rt config.Runtime) {
-	if !rt.AutoAuth {
-		return
-	}
-	var parts []string
-	if rt.Force {
-		parts = append(parts, "force")
-	}
-	if rt.Bypass {
-		parts = append(parts, "bypass")
-	}
-	if len(parts) == 0 {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "(config has auto_auth with %s; running full pipeline. Use --no-config for interactive menu.)\n",
-		strings.Join(parts, "+"))
 }
 
 func main() {
@@ -837,7 +1089,7 @@ func main() {
 
 	explicitCLI := cliFlags.UsernameSet && cliFlags.PasswordSet
 	pipelineFlags := cliFlags.ForceSet || cliFlags.BypassSet
-	wantPipeline := rt.HasCredentials() && (explicitCLI || rt.AutoAuth || pipelineFlags)
+	wantPipeline := rt.HasCredentials() && (explicitCLI || (rt.AutoAuth && !menu) || pipelineFlags)
 
 	if (explicitCLI || pipelineFlags) && !rt.HasCredentials() {
 		fail(exitUsage, "missing credentials: provide -u and -p, set %s/%s, or use a config file with both fields",
@@ -845,8 +1097,32 @@ func main() {
 	}
 
 	if wantPipeline {
-		warnAutoAuthPipeline(rt)
-		nonInteractiveRun(rt)
+		isAutoAuthOnly := rt.AutoAuth && !explicitCLI && !pipelineFlags
+		if isAutoAuthOnly {
+			startInterruptMonitor()
+			if checkInterrupt() {
+				interactiveRun(&rt)
+				return
+			}
+		}
+		
+		err := nonInteractiveRun(rt)
+		if err != nil {
+			printErr(err)
+			if isAutoAuthOnly {
+				fmt.Println("\nPress Enter to exit...")
+				<-interruptChan
+			}
+			os.Exit(exitRuntime)
+		}
+		
+		if isAutoAuthOnly {
+			// Success: wait 2 seconds or until Enter is pressed
+			select {
+			case <-interruptChan:
+			case <-time.After(2 * time.Second):
+			}
+		}
 		return
 	}
 

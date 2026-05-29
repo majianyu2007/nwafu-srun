@@ -13,28 +13,18 @@ var (
 	alpha   = "LVoJPiCN2R8G90yg+hmFHuacZ1OWMnrsSTXkYpUq/3dlbfKwv6xztjI7DeBE45QA"
 )
 
-// HMACMD5Hex computes HMAC-MD5(token, password) as hex (Srun portal password hash).
-func HMACMD5Hex(password, token string) string {
+// hmacMD5Hex computes HMAC-MD5(token, password) as hex (Srun portal password hash).
+func hmacMD5Hex(password, token string) string {
 	h := hmac.New(md5.New, []byte(token))
 	h.Write([]byte(password))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// GetMD5 is deprecated; use HMACMD5Hex.
-func GetMD5(password, token string) string {
-	return HMACMD5Hex(password, token)
-}
-
-// SHA1Hex computes SHA1 of value as hex (Srun chksum).
-func SHA1Hex(value string) string {
+// sha1Hex computes SHA1 of value as hex (Srun chksum).
+func sha1Hex(value string) string {
 	h := sha1.New()
 	h.Write([]byte(value))
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// GetSha1 is deprecated; use SHA1Hex.
-func GetSha1(value string) string {
-	return SHA1Hex(value)
 }
 
 // xencode implements Srun's custom XTEA-like encryption.

@@ -21,6 +21,7 @@ type File struct {
 	Bypass             bool   `json:"bypass,omitempty"`
 	All                bool   `json:"all,omitempty"`
 	SavePromptDisabled bool   `json:"save_prompt_disabled,omitempty"`
+	LogoutMode         string `json:"logout_mode,omitempty"`
 }
 
 // Runtime holds merged settings for the current process.
@@ -32,18 +33,20 @@ type Runtime struct {
 
 // CLIFlags are explicit command-line overrides (non-zero / set means override).
 type CLIFlags struct {
-	UsernameSet bool
-	Username    string
-	PasswordSet bool
-	Password    string
-	AcIDSet     bool
-	AcID        string
-	ForceSet    bool
-	Force       bool
-	BypassSet   bool
-	Bypass      bool
-	AllSet      bool
-	All         bool
+	UsernameSet   bool
+	Username      string
+	PasswordSet   bool
+	Password      string
+	AcIDSet       bool
+	AcID          string
+	ForceSet      bool
+	Force         bool
+	BypassSet     bool
+	Bypass        bool
+	AllSet        bool
+	All           bool
+	LogoutModeSet bool
+	LogoutMode    string
 }
 
 // LoadOptions controls config discovery.
@@ -151,6 +154,9 @@ func Merge(rt *Runtime, cli CLIFlags, envUser, envPass string) Runtime {
 	if cli.AllSet {
 		out.All = cli.All
 	}
+	if cli.LogoutModeSet {
+		out.LogoutMode = cli.LogoutMode
+	}
 	out.File.Sanitize()
 	return out
 }
@@ -190,6 +196,11 @@ func FileForPersist(rt Runtime, cli CLIFlags, fromDisk File) File {
 		} else {
 			f.All = fromDisk.All
 		}
+	}
+	if cli.LogoutModeSet {
+		f.LogoutMode = rt.LogoutMode
+	} else {
+		f.LogoutMode = fromDisk.LogoutMode
 	}
 	f.Sanitize()
 	return f

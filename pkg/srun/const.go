@@ -40,7 +40,7 @@ const (
 	EnvPassword = "NWAFU_SRUN_PASSWORD"
 )
 
-// CampusDNSServers returns campus DNS servers for fallback resolution.
-func CampusDNSServers() []string {
+// campusDNSServers returns campus DNS servers for fallback resolution.
+func campusDNSServers() []string {
 	return []string{CampusDNS1, CampusDNS2}
 }

@@ -27,14 +27,15 @@ type LoginInfo struct {
 
 // Client handles communication with the Srun authentication portal.
 type Client struct {
-	Username string
-	Password string
-	IP       string
-	MAC      string
-	AcID     string
-	BaseURL  string
+	Username   string
+	Password   string
+	IP         string
+	MAC        string
+	AcID       string
+	BaseURL    string
+	LogoutMode string
 
-	log        Logger
+	log        logger
 	httpClient *http.Client
 }
 
@@ -49,15 +50,15 @@ func NewClient(username, password, acid string) *Client {
 		Password:   password,
 		AcID:       acid,
 		BaseURL:    PortalDomain,
-		log:        NopLogger{},
+		log:        nopLogger{},
 		httpClient: newPortalHTTPClient(jar),
 	}
 }
 
 // SetLogger sets the diagnostic logger for this client.
-func (c *Client) SetLogger(l Logger) {
+func (c *Client) SetLogger(l logger) {
 	if l == nil {
-		c.log = NopLogger{}
+		c.log = nopLogger{}
 		return
 	}
 	c.log = l
@@ -65,7 +66,7 @@ func (c *Client) SetLogger(l Logger) {
 
 // SetVerbose enables or disables verbose logging via stderr.
 func (c *Client) SetVerbose(verbose bool) {
-	c.log = NewVerboseLogger(verbose, "Portal")
+	c.log = newVerboseLogger(verbose, "Portal")
 }
 
 func (c *Client) ctx() context.Context {
@@ -81,7 +82,7 @@ func resolveBaseURL(domainURL, fallbackIP, testPath, fallbackScheme string) stri
 	}
 
 	host := strings.TrimPrefix(strings.TrimPrefix(domainURL, "https://"), "http://")
-	for _, dns := range CampusDNSServers() {
+	for _, dns := range campusDNSServers() {
 		r := &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -135,27 +136,13 @@ func (c *Client) portalHost() string {
 func (c *Client) GetIP() (string, error) {
 	c.probeAndSetBaseURL()
 
-	req, err := http.NewRequestWithContext(c.ctx(), http.MethodGet, c.getHostLoginPageURL(), nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", DefaultUserAgent)
-
-	c.log.Debugf("GET %s", c.getHostLoginPageURL())
-	resp, err := c.httpClient.Do(req)
+	body, err := c.getBytes(c.getHostLoginPageURL(), nil)
 	if err != nil {
 		return "", wrapPortalErr(err, "get IP")
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read login page: %w", err)
-	}
 	c.log.Debugf("login page response len=%d", len(body))
 
-	re := regexp.MustCompile(`ip\s*:\s*"(.*?)"`)
-	matches := re.FindStringSubmatch(string(body))
+	matches := reIP.FindStringSubmatch(string(body))
 	if len(matches) > 1 {
 		c.IP = matches[1]
 		return c.IP, nil
@@ -177,27 +164,13 @@ func (c *Client) GetChallenge() (string, error) {
 	q.Set("_", nowMs)
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(c.ctx(), http.MethodGet, u.String(), nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", DefaultUserAgent)
-
-	c.log.Debugf("GET %s", u.String())
-	resp, err := c.httpClient.Do(req)
+	body, err := c.getBytes(u.String(), nil)
 	if err != nil {
 		return "", wrapPortalErr(err, "get challenge")
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read challenge: %w", err)
-	}
 	c.log.Debugf("challenge response: %s", string(body))
 
-	re := regexp.MustCompile(`"challenge":"(.*?)"`)
-	matches := re.FindStringSubmatch(string(body))
+	matches := reChallenge.FindStringSubmatch(string(body))
 	if len(matches) > 1 {
 		return matches[1], nil
 	}
@@ -252,13 +225,13 @@ func (c *Client) LogIn() (*LoginInfo, error) {
 		return nil, err
 	}
 
-	md5Info := HMACMD5Hex(c.Password, challenge)
+	md5Info := hmacMD5Hex(c.Password, challenge)
 	md5Str := "{MD5}" + md5Info
 	infoStr, err := c.getInfoString(challenge)
 	if err != nil {
 		return nil, err
 	}
-	chksumStr := SHA1Hex(c.chksumAdd(challenge, md5Info, infoStr))
+	chksumStr := sha1Hex(c.chksumAdd(challenge, md5Info, infoStr))
 
 	u, err := url.Parse(c.getLogInURL())
 	if err != nil {
@@ -278,46 +251,32 @@ func (c *Client) LogIn() (*LoginInfo, error) {
 	q.Set("_", strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(c.ctx(), http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, err
+	extraHeaders := map[string]string{
+		"Accept":           "text/javascript, application/javascript, application/ecmascript, application/x-ecmascript, */*; q=0.01",
+		"Accept-Language":  "zh-CN,zh;q=0.9,en;q=0.8",
+		"Connection":       "keep-alive",
+		"Cookie":           "lang=zh-CN",
+		"Host":             c.portalHost(),
+		"Referer":          c.getHostLoginPageURL(),
+		"X-Requested-With": "XMLHttpRequest",
 	}
-	req.Header.Set("Accept", "text/javascript, application/javascript, application/ecmascript, application/x-ecmascript, */*; q=0.01")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-	req.Header.Set("Connection", "keep-alive")
-	req.AddCookie(&http.Cookie{Name: "lang", Value: "zh-CN"})
-	req.Header.Set("Host", c.portalHost())
-	req.Header.Set("Referer", c.getHostLoginPageURL())
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("User-Agent", DefaultUserAgent)
-
-	c.log.Debugf("GET %s", redactSensitive(u.String()))
-	resp, err := c.httpClient.Do(req)
+	body, err := c.getBytes(u.String(), extraHeaders)
 	if err != nil {
 		return nil, wrapPortalErr(err, "login")
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read login response: %w", err)
-	}
 	c.log.Debugf("login response: %s", redactSensitive(string(body)))
 
-	re := regexp.MustCompile(`"res":"(.*?)"`)
-	matches := re.FindStringSubmatch(string(body))
+	matches := reRes.FindStringSubmatch(string(body))
 	res := ""
 	if len(matches) > 1 {
 		res = matches[1]
 	}
-	errRe := regexp.MustCompile(`"error":"(.*?)"`)
-	errMatches := errRe.FindStringSubmatch(string(body))
+	errMatches := reError.FindStringSubmatch(string(body))
 	errStr := ""
 	if len(errMatches) > 1 {
 		errStr = errMatches[1]
 	}
-	errMsgRe := regexp.MustCompile(`"error_msg":"(.*?)"`)
-	errMsgMatches := errMsgRe.FindStringSubmatch(string(body))
+	errMsgMatches := reErrorMsg.FindStringSubmatch(string(body))
 	errMsg := ""
 	if len(errMsgMatches) > 1 {
 		errMsg = errMsgMatches[1]
@@ -366,6 +325,19 @@ var (
 	loginFailRe    = regexp.MustCompile(`(?i)\b(unsuccessful|fail|failed|invalid|incorrect|wrong|error)\b`)
 )
 
+// Pre-compiled regexes for parsing portal responses.
+var (
+	reIP        = regexp.MustCompile(`ip\s*:\s*"(.*?)"`)
+	reChallenge = regexp.MustCompile(`"challenge":"(.*?)"`)
+	reRes       = regexp.MustCompile(`"res":"(.*?)"`)
+	reError     = regexp.MustCompile(`"error":"(.*?)"`)
+	reErrorMsg  = regexp.MustCompile(`"error_msg":"(.*?)"`)
+	reUser      = regexp.MustCompile(`"user_name":"([^"]*)"`)
+	reBalance   = regexp.MustCompile(`"user_balance":(.*?),`)
+	reSumBytes  = regexp.MustCompile(`"sum_bytes":(\d+),`)
+	reMAC       = regexp.MustCompile(`"user_mac":"(([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})"`)
+)
+
 // loginSucceeded recognises Srun login success responses.
 //
 // Srun deployments are inconsistent about where the success marker lives:
@@ -386,8 +358,7 @@ func loginSucceeded(res, errStr, errMsg string) bool {
 }
 
 func parsePortalError(body string, resMatches []string) string {
-	reErr := regexp.MustCompile(`"error_msg":"(.*?)"`)
-	if m := reErr.FindStringSubmatch(body); len(m) > 1 {
+	if m := reErrorMsg.FindStringSubmatch(body); len(m) > 1 {
 		return m[1]
 	}
 	if len(resMatches) > 1 {
@@ -413,24 +384,13 @@ func (c *Client) GetLoginInfo() (*LoginInfo, error) {
 	q.Set("_", strconv.FormatInt(time.Now().Unix(), 10))
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(c.ctx(), http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, err
+	extraHeaders := map[string]string{
+		"Accept":  "*/*",
+		"Referer": c.getHostLoginPageURL(),
 	}
-	req.Header.Set("User-Agent", DefaultUserAgent)
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Referer", c.getHostLoginPageURL())
-
-	c.log.Debugf("GET %s", u.String())
-	resp, err := c.httpClient.Do(req)
+	body, err := c.getBytes(u.String(), extraHeaders)
 	if err != nil {
 		return nil, wrapPortalErr(err, "get status")
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read status response: %w", err)
 	}
 	c.log.Debugf("status response: %s", string(body))
 
@@ -439,15 +399,14 @@ func (c *Client) GetLoginInfo() (*LoginInfo, error) {
 		return nil, err
 	}
 	if info.MAC != "" {
-		c.MAC = normalizeMAC(info.MAC)
+		c.MAC = NormalizeMAC(info.MAC)
 		info.MAC = c.MAC
 	}
 	return info, nil
 }
 
 func parseLoginInfo(strLoginInfo, ip string) (*LoginInfo, error) {
-	reErr := regexp.MustCompile(`"error":"(.*?)"`)
-	errMatch := reErr.FindStringSubmatch(strLoginInfo)
+	errMatch := reError.FindStringSubmatch(strLoginInfo)
 	if len(errMatch) < 2 || errMatch[1] != "ok" {
 		errInfo := "unknown"
 		if len(errMatch) > 1 {
@@ -456,10 +415,6 @@ func parseLoginInfo(strLoginInfo, ip string) (*LoginInfo, error) {
 		return nil, fmt.Errorf("%w: %s", ErrNotOnline, errInfo)
 	}
 
-	reUser := regexp.MustCompile(`"user_name":"([^"]*)"`)
-	reBalance := regexp.MustCompile(`"user_balance":(.*?),`)
-	reSumBytes := regexp.MustCompile(`"sum_bytes":(\d+),`)
-	reMAC := regexp.MustCompile(`"user_mac":"(([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})"`)
 
 	info := &LoginInfo{IP: ip, Balance: "0.00"}
 	if m := reUser.FindStringSubmatch(strLoginInfo); len(m) > 1 {
@@ -473,7 +428,7 @@ func parseLoginInfo(strLoginInfo, ip string) (*LoginInfo, error) {
 		info.UsedMB = bytesVal / 1_000_000.0
 	}
 	if m := reMAC.FindStringSubmatch(strLoginInfo); len(m) > 1 {
-		info.MAC = normalizeMAC(m[1])
+		info.MAC = NormalizeMAC(m[1])
 	}
 	return info, nil
 }
@@ -494,7 +449,11 @@ func formatLoginInfo(info *LoginInfo, title string) string {
 	}
 	var b strings.Builder
 	b.WriteString("\n-----------------------------------------\n")
-	b.WriteString(fmt.Sprintf("%-20s-%20s\n", title, ""))
+	padding := (41 - len(title)) / 2
+	if padding < 0 {
+		padding = 0
+	}
+	b.WriteString(strings.Repeat(" ", padding) + title + "\n")
 	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "     User name", info.Username))
 	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "            IP", info.IP))
 	b.WriteString(fmt.Sprintf("%-20s-%20s\n", "       Balance", info.Balance))
@@ -516,11 +475,43 @@ func (c *Client) QuietLogOut() error {
 	return c.logOutInternal(true)
 }
 
+func (c *Client) selfServiceLogOutInternal(quiet bool) error {
+	if c.MAC == "" {
+		if info, err := c.GetLoginInfo(); err == nil && info.MAC != "" {
+			c.MAC = info.MAC
+		}
+	}
+	if c.MAC == "" {
+		return fmt.Errorf("%w: cannot kick sessions without device MAC", ErrMACUndetected)
+	}
+
+	if !quiet {
+		c.log.Infof("logging into self-service to kick sessions matching MAC %s", c.MAC)
+	}
+	selfSvc := NewSelfServiceClient()
+	selfSvc.SetLogger(c.log)
+	if err := selfSvc.SSOLogin(c.Username); err != nil {
+		return fmt.Errorf("SSO failed: %w", err)
+	}
+	kicked, err := selfSvc.KickAllByMAC(c.MAC)
+	if err != nil {
+		return fmt.Errorf("self-service kick failed: %w", err)
+	}
+	if kicked == 0 {
+		return errors.New("fail to logout: no sessions kicked")
+	}
+	return nil
+}
+
 func (c *Client) logOutInternal(quiet bool) error {
 	if c.IP == "" {
 		if _, err := c.GetIP(); err != nil {
 			return err
 		}
+	}
+
+	if c.LogoutMode == "selfservice" {
+		return c.selfServiceLogOutInternal(quiet)
 	}
 
 	u, err := url.Parse(c.getLogInURL())
@@ -536,27 +527,13 @@ func (c *Client) logOutInternal(quiet bool) error {
 	q.Set("_", strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(c.ctx(), http.MethodGet, u.String(), nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", DefaultUserAgent)
-
-	c.log.Debugf("GET %s", u.String())
-	resp, err := c.httpClient.Do(req)
+	body, err := c.getBytes(u.String(), nil)
 	if err != nil {
 		return wrapPortalErr(err, "logout")
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read logout response: %w", err)
-	}
 	c.log.Debugf("logout response: %s", string(body))
 
-	re := regexp.MustCompile(`"res":"(.*?)"`)
-	matches := re.FindStringSubmatch(string(body))
+	matches := reRes.FindStringSubmatch(string(body))
 	if len(matches) > 1 && matches[1] == "ok" {
 		return nil
 	}
@@ -565,28 +542,15 @@ func (c *Client) logOutInternal(quiet bool) error {
 		return errors.New("portal logout failed")
 	}
 
-	// Portal logout often fails; try self-service kick as fallback (own MAC only).
-	if c.MAC == "" {
-		if info, err := c.GetLoginInfo(); err == nil && info.MAC != "" {
-			c.MAC = info.MAC
-		}
-	}
-	if c.MAC == "" {
-		return fmt.Errorf("portal logout failed and %w: cannot kick sessions without device MAC", ErrMACUndetected)
-	}
-
 	c.log.Infof("portal logout unavailable, trying self-service kick")
-	selfSvc := NewSelfServiceClient()
-	selfSvc.SetLogger(c.log)
-	if err := selfSvc.SSOLogin(c.Username); err != nil {
-		return fmt.Errorf("SSO failed: %w", err)
-	}
-	kicked, err := selfSvc.KickAllByMAC(c.MAC)
+	return c.selfServiceLogOutInternal(quiet)
+}
+
+func (c *Client) getBytes(urlStr string, extraHeaders map[string]string) ([]byte, error) {
+	resp, err := doRequest(c.httpClient, c.ctx(), http.MethodGet, urlStr, extraHeaders, nil, c.log)
 	if err != nil {
-		return fmt.Errorf("self-service kick failed: %w", err)
+		return nil, err
 	}
-	if kicked == 0 {
-		return errors.New("fail to logout: no sessions kicked")
-	}
-	return nil
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
 }

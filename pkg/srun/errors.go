@@ -75,17 +75,6 @@ func proxyHint(err error) string {
 	return ""
 }
 
-// FormatError returns err string plus optional Hint line.
-func FormatError(err error) string {
-	if err == nil {
-		return ""
-	}
-	if h := Hint(err); h != "" {
-		return fmt.Sprintf("%v\nHint: %s", err, h)
-	}
-	return err.Error()
-}
-
 func wrapPortalErr(err error, msg string) error {
 	if err == nil {
 		return nil

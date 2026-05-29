@@ -37,10 +37,11 @@ pkg/srun/
 - Non-interactive when: explicit `-u/-p`, `auto_auth` in config, or `-f`/`-b` with saved creds
 - Passwords stored **plaintext**, mode `0600`, Windows hidden attribute on config file
 - Flags: `--no-config`, `--save-config`
+- Logout modes: `portal` (default), `selfservice` (SSO session kick for MAC bypass users)
 
 ## Interactive menu
 
-1 Login · 2 Force re-login · 3 Logout · 4 Status · 5 Bypass · 6 Settings (auto-auth/force/bypass/all) · 7 Change credentials · 8 Exit
+1 Login · 2 Force re-login · 3 Logout · 4 Status · 5 Bypass · 6 Manage active sessions · 7 Settings (auto-auth/force/bypass/all/logout-mode) · 8 Change credentials · 0 Exit
 
 After successful login: optional save prompt (y / n / Never).
 
@@ -56,6 +57,7 @@ Use `errors.Is` with sentinels in `errors.go`. Print `srun.Hint(err)` for user r
 | `-f` | Pre-login logout |
 | `-b` | Post-login bypass |
 | `-a` | Kick all devices on bypass |
+| `--logout-mode` | Set logout mode: `portal` or `selfservice` |
 | `--config`, `--no-config`, `--save-config` | Config file control |
 
 Env: `NWAFU_SRUN_USERNAME`, `NWAFU_SRUN_PASSWORD`.

@@ -15,7 +15,7 @@ go build -o nwafu-srun .
 # 2) 直接登录
 ./nwafu-srun -u USER -p PASS
 
-# 3) 保存配置；在交互菜单 6（设置）中开启 auto-auth / bypass 等，或编辑 JSON 的 "auto_auth"
+# 3) 保存配置；在交互菜单 7（设置）中开启 auto-auth / bypass 等，或编辑 JSON 的 "auto_auth"
 ./nwafu-srun -u USER -p PASS --save-config
 ```
 
@@ -30,20 +30,20 @@ go build -o utils/bypass/bypass ./utils/bypass
 
 ## 使用方式
 
-### 非交互模式
+### 命令行直连（非交互模式）
 
-满足以下任一条件时自动进入非交互流水线（`pre-logout? → login → bypass?`）：
+若满足以下任一条件，程序将直接执行登录/注销/绕过流程，不会进入交互式菜单：
 
-- 命令行同时提供 `-u` 与 `-p`
-- 环境变量 `NWAFU_SRUN_USERNAME` + `NWAFU_SRUN_PASSWORD`
-- 配置文件中 `auto_auth: true` 且已保存用户名密码
-- 已保存凭据且命令行指定了 `-f` 或 `-b`
+- 命令行指定了 `-u` 和 `-p` 参数
+- 环境变量中设置了 `NWAFU_SRUN_USERNAME` 和 `NWAFU_SRUN_PASSWORD`
+- 配置文件中 `auto_auth` 为 `true` 且已保存用户名和密码
+- 已保存账号凭据，且命令行指定了 `-f`（重新登录）或 `-b`（绕过计费）参数
 
 ```bash
-./nwafu-srun -u USER -p PASS          # 登录
-./nwafu-srun -u USER -p PASS -f       # 先登出再登录
-./nwafu-srun -u USER -p PASS -b       # 登录后 bypass
-./nwafu-srun -u USER -p PASS -f -b -a # 完整流水线并断开所有设备
+./nwafu-srun -u USER -p PASS          # 直接登录
+./nwafu-srun -u USER -p PASS -f       # 强制重新登录（先登出已有会话再登录）
+./nwafu-srun -u USER -p PASS -b       # 登录并执行计费绕过（默认仅下线本机 MAC 会话）
+./nwafu-srun -u USER -p PASS -f -b -a # 强制重新登录，并绕过该账号下所有在线设备的计费
 ```
 
 ### 交互模式
@@ -54,12 +54,13 @@ go build -o utils/bypass/bypass ./utils/bypass
 |------|------|
 | 1 | 登录（已在线时询问是否覆盖） |
 | 2 | 强制重登（先登出再登录） |
-| 3 | 注销 |
+| 3 | 注销（根据配置选择常规 Portal 注销或自服务直接踢下线本机 MAC） |
 | 4 | 状态查询 |
 | 5 | Bypass 计费（询问是否踢光账户下所有会话） |
-| 6 | 设置（保存凭据、切换 auto-auth / force / bypass / kick-all 并立即写入配置等） |
-| 7 | 修改本会话凭据（用户名/密码） |
-| 8 | 退出（`q` / `quit` / `exit` 亦可） |
+| 6 | 在线会话管理（连接自服务列出所有在线会话，可手动选择踢下线指定设备或一键全踢） |
+| 7 | 设置（保存凭据、切换 auto-auth / force / bypass / kick-all / logout-mode 并立即写入配置等） |
+| 8 | 修改本会话凭据（用户名/密码） |
+| 0 | 退出（`q` / `quit` / `exit` 亦可） |
 
 输入用户名和密码后会询问是否立即登录；登录成功则出现保存凭据提示（`y` / `n` / `never`）。`Ctrl+D` 安静退出。
 
@@ -71,9 +72,9 @@ go build -o utils/bypass/bypass ./utils/bypass
 1. 交互模式登录成功后，选择保存配置并开启 `auto_auth`
 2. 此后直接运行 `nwafu-srun` / `nwafu-srun.exe`（无参数）即可自动登录
 
-在**设置菜单（6）**里也可切换 `force`（先登出）、`bypass`（登录后 bypass）、`kick-all`（等同 `-a`，会二次确认），与 `auto_auth` 一样会立即写入配置文件。
+在 **设置菜单（7）** 里也可切换 `force`（先登出）、`bypass`（登录后 bypass）、`kick-all`（等同 `-a`，会二次确认）、`logout-mode`（注销模式：portal 或 selfservice，后者用于强踢本机 MAC 会话以规避无感知自动重新登录），与 `auto_auth` 一样会立即写入配置文件。
 
-若配置里同时启用了 `force` 或 `bypass`，无参数启动时会先打印一行流水线提示并自动执行对应步骤；需要菜单时请传 `--no-config`。
+若配置文件中启用了 `auto_auth` 且设置了 `force` 或 `bypass`，无参数启动时将自动执行对应步骤。若需要进入菜单，请传入 `--no-config` 或 `-m` 参数。
 
 或通过命令行一次性写入配置：
 
@@ -104,7 +105,8 @@ go build -o utils/bypass/bypass ./utils/bypass
   "auto_auth": true,
   "force": false,
   "bypass": false,
-  "all": false
+  "all": false,
+  "logout_mode": "portal"
 }
 ```
 
@@ -125,8 +127,9 @@ go build -o utils/bypass/bypass ./utils/bypass
 | `-u`, `-p` | 用户名 / 密码 |
 | `-f` | 登录前登出 |
 | `-b` | 登录后 bypass（默认仅踢自己 MAC 的会话） |
-| `-a` | 与 `-b` 配合：踢光账户下所有会话（bypass 真正生效所必需） |
+| `-a` | 与 `-b` 配合：对账号下所有在线设备生效绕过计费（默认仅对本机生效） |
 | `--acid` | ac_id（默认 1） |
+| `--logout-mode` | 注销模式：`portal`（默认，网页注销）或 `selfservice`（自服务踢下线本机 MAC 会话） |
 | `-v` | 详细日志（stderr） |
 | `-h` | 帮助 |
 
@@ -150,20 +153,18 @@ go build -o utils/bypass/bypass ./utils/bypass
 
 ### Bypass 工作原理
 
-Bypass 的有效性依赖于一次性"重写"账户下**所有**在线会话的 user_mac 让 RADIUS accounting 状态错乱：
+Bypass 的有效性依赖于断开在线会话并触发 RADIUS 计费服务状态不同步（Accounting Desync）：
 
-1. SSO 登入自服务门户，列出该账号当前所有在线会话（一般 ≤ 3）
-2. 对每个目标会话各生成一个**随机假 MAC**，立即提交下线请求
-3. 设备在 Portal 网关层并未真正注销，会立刻重新登记会话
-4. 由于 accounting 状态被打乱，新登记出的会话通常**不计费**
+1. 通过 SSO 单点登录方式接入自服务门户，列出该账号当前的所有在线会话（通常不超过 3 个）。
+2. 对选定的在线会话，使用一个**固定的无效假 MAC** `02:00:00:00:00:00` 提交下线请求。
+3. 设备在本地 Portal 网关层并未真正断开，但 RADIUS 计费服务器已将其视为下线并停止统计流量。
+4. 随后重新登记或维持在线的会话，通常便不再计入费用。
 
 注意：
 
-- 只踢一部分会话（例如只踢自己 MAC 的那一条）通常不会触发不计费效果——bypass 真正生效需要**一次踢光**所有会话。
-- 但"踢光所有会话"也意味着同账户下其他人的设备会被一起踢掉。出于这个副作用，**默认只踢自己 MAC 的会话**：
-  - 命令行：要真正 bypass 必须显式加 `-a`
-  - 交互菜单：选择 5 后会询问 *"Kick ALL sessions on this account?"*，回答 `y` 才全踢
-- 也不需要"持续踢"：触发一次成功的全踢即可。
+- **单设备与全账号绕过**：默认仅会踢除与本机 MAC 对应的会话（即仅使本机生效绕过计费，不影响其他设备）。若希望该账号下的**所有设备**都同时生效绕过，则需要附加 `-a` 参数（或在菜单中确认全踢），使该账号下的所有在线设备均触发踢线。
+- **设备短暂断开**：被踢线的设备会经历非常短暂的下线并自动重新登记上线。该机制并不需要“持续高频踢线”，只需在登录或断网重连后执行一次成功的踢线操作即可。
+- **重连失效风险**：当设备断网并重新连接校园网（例如 Wi-Fi 断开重连、有线网线拔插）后，系统会建立全新的计费会话，绕过可能会因此失效。建议在每次网络重连后重新执行一次本工具，或者手动登录自服务门户确认当前的计费状态。
 
 > **免责声明**：Bypass 功能的实际效果取决于校园网认证系统的策略与配置，本项目不保证其在所有环境、所有时间均能生效。使用者应在使用后自行验证计费是否已被绕过，因 bypass 失败产生的流量费用与本项目无关。
 
@@ -192,11 +193,59 @@ Bypass 的有效性依赖于一次性"重写"账户下**所有**在线会话的 
 | 1 | 运行时错误（认证/网络/bypass 失败） |
 | 2 | 参数或配置错误 |
 
-## crontab 示例
+## 后台运行与断线重连守护
+
+本程序未内置后台守护进程（Daemon）模式，但可以通过系统级的定时任务或服务管理器轻松实现**开机自启**和**断线重连检测**。
+
+### 1. 使用 Cron 定时检查（Linux / macOS 推荐）
+
+配置 Cron 定时任务，每分钟检查一次网络状态，如果掉线则自动重连。
+
+编辑 crontab (`crontab -e`)，添加以下规则：
 
 ```cron
-@reboot sleep 30 && NWAFU_SRUN_USERNAME=u NWAFU_SRUN_PASSWORD=p /path/to/nwafu-srun -f >> /tmp/nwafu-srun.log 2>&1
+# 每分钟执行一次检测与自动认证（请使用绝对路径，且必须已在设置菜单中保存凭据并开启 auto_auth）
+* * * * * /path/to/nwafu-srun >> /tmp/nwafu-srun-keep.log 2>&1
 ```
+
+### 2. 使用 Systemd 作为服务常驻后台（Linux）
+
+在 `/etc/systemd/system/nwafu-srun.service` 创建服务文件：
+
+```ini
+[Unit]
+Description=NWAFU SRUN Portal Autoconnect Client
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/path/to/nwafu-srun
+# 如果断开，等待 10 秒后自动重启（配合已保存的 auto_auth=true 规则）
+Restart=always
+RestartSec=10
+User=your_username
+Environment=HOME=/home/your_username
+
+[Install]
+WantedBy=multi-user.target
+```
+
+然后启用服务：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable nwafu-srun.service
+sudo systemctl start nwafu-srun.service
+```
+
+### 3. 使用 Windows 任务计划程序（Windows）
+
+1. 打开**任务计划程序** (Task Scheduler)。
+2. 创建一个新任务，触发器设置为 **“当任何用户登录时”**。
+3. 操作设置为 **“启动程序”**，指向 `nwafu-srun.exe`，不加任何参数（前提是已使用交互菜单 `7` 保存配置并开启了 `auto_auth`）。
+4. 在**设置**选项卡中，勾选 **“如果任务失败，重新启动”**，并可以配置为每小时或断网时重复运行。
+
+或者使用第三方小工具 `NSSM` (nssm.cc) 将其注册为 Windows 后台 Service 服务，配置为 `Restart: always`。
 
 ## 开发
 

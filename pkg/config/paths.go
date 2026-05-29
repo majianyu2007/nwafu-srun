@@ -10,11 +10,6 @@ const (
 	userFileName = "config.json"
 )
 
-// Location is kept for API compatibility; only user config is supported.
-type Location string
-
-const LocationUser Location = "user"
-
 // Paths holds the user config file path.
 type Paths struct {
 	User string
@@ -33,11 +28,6 @@ func ResolvePaths() (Paths, error) {
 
 // DefaultPath returns the path used for load/save.
 func DefaultPath(paths Paths) string {
-	return paths.User
-}
-
-// PathFor returns the config file path (always user dir).
-func PathFor(_ Location, paths Paths) string {
 	return paths.User
 }
 

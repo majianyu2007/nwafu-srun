@@ -1,7 +1,7 @@
 package srun
 
 import (
-	"crypto/rand"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -10,13 +10,15 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
 // SelfServiceClient handles communication with the Srun self-service portal.
 type SelfServiceClient struct {
 	BaseURL string
-	log     Logger
+	log     logger
 
 	httpClient *http.Client
 }
@@ -29,15 +31,15 @@ func NewSelfServiceClient() *SelfServiceClient {
 	}
 	return &SelfServiceClient{
 		BaseURL:    SelfServiceDomain,
-		log:        NopLogger{},
+		log:        nopLogger{},
 		httpClient: newSelfServiceHTTPClient(jar),
 	}
 }
 
 // SetLogger sets the diagnostic logger.
-func (s *SelfServiceClient) SetLogger(l Logger) {
+func (s *SelfServiceClient) SetLogger(l logger) {
 	if l == nil {
-		s.log = NopLogger{}
+		s.log = nopLogger{}
 		return
 	}
 	s.log = l
@@ -45,7 +47,7 @@ func (s *SelfServiceClient) SetLogger(l Logger) {
 
 // SetVerbose enables verbose logging to stderr.
 func (s *SelfServiceClient) SetVerbose(verbose bool) {
-	s.log = NewVerboseLogger(verbose, "SelfService")
+	s.log = newVerboseLogger(verbose, "SelfService")
 }
 
 func (s *SelfServiceClient) probeAndSetBaseURL() {
@@ -62,15 +64,7 @@ func (s *SelfServiceClient) SSOLogin(username string) error {
 	token := base64.StdEncoding.EncodeToString([]byte("zh-CN:" + username))
 	ssoURL := s.BaseURL + "/site/sso?data=" + token
 
-	s.log.Debugf("SSO URL: %s", ssoURL)
-
-	req, err := http.NewRequest(http.MethodGet, ssoURL, nil)
-	if err != nil {
-		return fmt.Errorf("SSO request failed: %w", err)
-	}
-	req.Header.Set("User-Agent", DefaultUserAgent)
-
-	resp, err := s.httpClient.Do(req)
+	resp, err := doRequest(s.httpClient, context.Background(), http.MethodGet, ssoURL, nil, nil, s.log)
 	if err != nil {
 		return wrapSelfServiceErr(err, "SSO")
 	}
@@ -88,14 +82,14 @@ func (s *SelfServiceClient) SSOLogin(username string) error {
 	return nil
 }
 
-// SessionInfo holds parsed session data from the self-service home page.
-type SessionInfo struct {
+// sessionInfo holds parsed session data from the self-service home page.
+type sessionInfo struct {
 	ID  string
 	MAC string
 }
 
-// CSRFInfo holds parsed CSRF field name and token from home page HTML.
-type CSRFInfo struct {
+// csrfInfo holds parsed CSRF field name and token from home page HTML.
+type csrfInfo struct {
 	FieldName string
 	Token     string
 }
@@ -112,13 +106,13 @@ var (
 	deleteLinkRe     = regexp.MustCompile(`/home/delete\?id=(\d+)&(?:amp;)?user_mac=([^"&]+)`)
 )
 
-func parseCSRF(html string) (*CSRFInfo, error) {
+func parseCSRF(html string) (*csrfInfo, error) {
 	token := firstSubmatch(html, csrfTokenMetaRe, csrfTokenMetaRe2)
 	if token == "" {
 		return nil, fmt.Errorf("%w: meta csrf-token missing", ErrCSRFParseFailed)
 	}
 
-	csrf := &CSRFInfo{Token: token}
+	csrf := &csrfInfo{Token: token}
 
 	// Yii2: field name in csrf-param meta (common on NWAFU self-service).
 	if param := firstSubmatch(html, csrfParamMetaRe, csrfParamMetaRe2); param != "" {
@@ -157,31 +151,25 @@ func firstSubmatch(html string, res ...*regexp.Regexp) string {
 	return ""
 }
 
-// ParseHomePage extracts CSRF info and online sessions from self-service HTML.
-func ParseHomePage(html string) (*CSRFInfo, []SessionInfo, error) {
+// parseHomePage extracts CSRF info and online sessions from self-service HTML.
+func parseHomePage(html string) (*csrfInfo, []sessionInfo, error) {
 	csrf, err := parseCSRF(html)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	matches := deleteLinkRe.FindAllStringSubmatch(html, -1)
-	var sessions []SessionInfo
+	var sessions []sessionInfo
 	for _, m := range matches {
 		mac, _ := url.QueryUnescape(m[2])
-		sessions = append(sessions, SessionInfo{ID: m[1], MAC: mac})
+		sessions = append(sessions, sessionInfo{ID: m[1], MAC: mac})
 	}
 	return csrf, sessions, nil
 }
 
 // GetSessions fetches the home page and parses CSRF token + session list.
-func (s *SelfServiceClient) GetSessions() (*CSRFInfo, []SessionInfo, error) {
-	req, err := http.NewRequest(http.MethodGet, s.BaseURL+"/home", nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	req.Header.Set("User-Agent", DefaultUserAgent)
-
-	resp, err := s.httpClient.Do(req)
+func (s *SelfServiceClient) GetSessions() (*csrfInfo, []sessionInfo, error) {
+	resp, err := doRequest(s.httpClient, context.Background(), http.MethodGet, s.BaseURL+"/home", nil, nil, s.log)
 	if err != nil {
 		return nil, nil, wrapSelfServiceErr(err, "fetch home page")
 	}
@@ -192,7 +180,7 @@ func (s *SelfServiceClient) GetSessions() (*CSRFInfo, []SessionInfo, error) {
 		return nil, nil, fmt.Errorf("failed to read home page: %w", err)
 	}
 
-	csrf, sessions, err := ParseHomePage(string(body))
+	csrf, sessions, err := parseHomePage(string(body))
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w", err)
 	}
@@ -207,7 +195,7 @@ func (s *SelfServiceClient) GetSessions() (*CSRFInfo, []SessionInfo, error) {
 // KickRetry times because TUN-mode VPN / fake-IP proxies frequently drop the
 // first request before letting subsequent ones through. HTTP-status errors
 // are NOT retried to avoid double-kicks.
-func (s *SelfServiceClient) KickSession(id, mac string, csrf *CSRFInfo) error {
+func (s *SelfServiceClient) KickSession(id, mac string, csrf *csrfInfo) error {
 	if csrf == nil || csrf.FieldName == "" {
 		return errors.New("CSRF info required")
 	}
@@ -220,17 +208,14 @@ func (s *SelfServiceClient) KickSession(id, mac string, csrf *CSRFInfo) error {
 	formData.Set("user_mac", mac)
 	body := formData.Encode()
 
+	extraHeaders := map[string]string{
+		"Content-Type": "application/x-www-form-urlencoded",
+		"Referer":      s.BaseURL + "/home",
+	}
+
 	var lastErr error
 	for attempt := 0; attempt <= KickRetry; attempt++ {
-		req, err := http.NewRequest(http.MethodPost, deleteURL, strings.NewReader(body))
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("User-Agent", DefaultUserAgent)
-		req.Header.Set("Referer", s.BaseURL+"/home")
-
-		resp, err := s.httpClient.Do(req)
+		resp, err := doRequest(s.httpClient, context.Background(), http.MethodPost, deleteURL, extraHeaders, strings.NewReader(body), s.log)
 		if err != nil {
 			lastErr = fmt.Errorf("kick request failed: %w", err)
 			if attempt < KickRetry {
@@ -240,7 +225,7 @@ func (s *SelfServiceClient) KickSession(id, mac string, csrf *CSRFInfo) error {
 			}
 			return lastErr
 		}
-		body, readErr := io.ReadAll(resp.Body)
+		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
 			lastErr = fmt.Errorf("kick response read failed: %w", readErr)
@@ -254,7 +239,7 @@ func (s *SelfServiceClient) KickSession(id, mac string, csrf *CSRFInfo) error {
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("%w: HTTP %d", ErrKickFailed, resp.StatusCode)
 		}
-		if kickResponseIndicatesError(string(body)) {
+		if kickResponseIndicatesError(string(respBody)) {
 			return fmt.Errorf("%w: server rejected kick", ErrKickFailed)
 		}
 		s.log.Debugf("kicked session %s", id)
@@ -263,14 +248,10 @@ func (s *SelfServiceClient) KickSession(id, mac string, csrf *CSRFInfo) error {
 	return lastErr
 }
 
-func randomMAC() (string, error) {
-	b := make([]byte, 6)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	b[0] = (b[0] | 0x02) & 0xFE
-	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", b[0], b[1], b[2], b[3], b[4], b[5]), nil
-}
+// fakeMAC is a fixed locally-administered MAC used to kick sessions.
+// The value is deliberately invalid so the RADIUS server cannot match
+// it to any real device, triggering the accounting desync.
+const fakeMAC = "02:00:00:00:00:00"
 
 // KickAllWithFakeMAC kicks sessions using random fake MACs.
 // If myMAC is non-empty, only sessions matching that MAC are kicked.
@@ -284,38 +265,76 @@ func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-
-	filterMAC := normalizeMAC(myMAC)
-	targets := 0
-	kicked := 0
-	for _, sess := range sessions {
-		if filterMAC != "" && normalizeMAC(sess.MAC) != filterMAC {
-			continue
-		}
-		targets++
-		fake, err := randomMAC()
-		if err != nil {
-			return kicked, err
-		}
-		if err := s.KickSession(sess.ID, fake, csrf); err != nil {
-			s.log.Debugf("failed to kick session %s: %v", sess.ID, err)
-			continue
-		}
-		kicked++
+	if len(sessions) == 0 {
+		return 0, ErrNoSessionsToKick
 	}
-	if kicked == 0 {
-		if len(sessions) == 0 {
-			return 0, ErrNoSessionsToKick
-		}
-		if filterMAC != "" {
+
+	s.log.Infof("Found %d online sessions before kick:", len(sessions))
+	for _, sess := range sessions {
+		s.log.Infof("  - id=%s mac=%s", sess.ID, sess.MAC)
+	}
+
+	filterMAC := NormalizeMAC(myMAC)
+
+	// Group sessions by normalized MAC address
+	groups := make(map[string][]sessionInfo)
+	for _, sess := range sessions {
+		mac := NormalizeMAC(sess.MAC)
+		groups[mac] = append(groups[mac], sess)
+	}
+
+	// Sort each group numerically by Session ID
+	for mac, group := range groups {
+		sort.Slice(group, func(i, j int) bool {
+			idI, errI := strconv.ParseInt(group[i].ID, 10, 64)
+			idJ, errJ := strconv.ParseInt(group[j].ID, 10, 64)
+			if errI == nil && errJ == nil {
+				return idI < idJ
+			}
+			return group[i].ID < group[j].ID
+		})
+		groups[mac] = group
+	}
+
+	var targets []sessionInfo
+	if filterMAC != "" {
+		// No -a specified: kick only the middle session of myMAC's group
+		group, exists := groups[filterMAC]
+		if !exists || len(group) == 0 {
 			return 0, fmt.Errorf("%w: filter MAC %s", ErrNoMatchingSession, myMAC)
 		}
-		if targets > 0 {
-			return 0, fmt.Errorf("%w: all kick requests failed", ErrKickFailed)
+		midIdx := len(group) / 2
+		targets = []sessionInfo{group[midIdx]}
+		s.log.Infof("Bypass mode (no -a): device %s has %d sessions, selecting middle one (ID: %s) to kick", myMAC, len(group), targets[0].ID)
+	} else {
+		// -a specified: kick the middle session of ALL MAC groups
+		for mac, group := range groups {
+			if len(group) == 0 {
+				continue
+			}
+			midIdx := len(group) / 2
+			targets = append(targets, group[midIdx])
+			s.log.Infof("Bypass mode (-a): device %s has %d sessions, selecting middle one (ID: %s) to kick", mac, len(group), group[midIdx].ID)
 		}
+		s.log.Infof("Bypass mode (-a): selected %d middle session(s) from %d device(s) to kick", len(targets), len(groups))
 	}
-	if kicked < targets {
-		s.log.Warnf("kicked %d/%d sessions", kicked, targets)
+
+	kicked := 0
+	for _, sess := range targets {
+		if err := s.KickSession(sess.ID, fakeMAC, csrf); err != nil {
+			s.log.Warnf("failed to kick session %s with fake MAC %s: %v", sess.ID, fakeMAC, err)
+			continue
+		}
+		s.log.Infof("Successfully kicked session %s (original MAC: %s) with fake MAC %s", sess.ID, sess.MAC, fakeMAC)
+		kicked++
+	}
+
+	if kicked == 0 {
+		return 0, fmt.Errorf("%w: all kick requests failed", ErrKickFailed)
+	}
+
+	if kicked < len(targets) {
+		s.log.Warnf("kicked %d/%d sessions", kicked, len(targets))
 	}
 	return kicked, nil
 }
@@ -331,10 +350,10 @@ func (s *SelfServiceClient) KickAllByMAC(myMAC string) (int, error) {
 		return 0, err
 	}
 
-	filter := normalizeMAC(myMAC)
+	filter := NormalizeMAC(myMAC)
 	kicked := 0
 	for _, sess := range sessions {
-		if normalizeMAC(sess.MAC) != filter {
+		if NormalizeMAC(sess.MAC) != filter {
 			continue
 		}
 		if err := s.KickSession(sess.ID, sess.MAC, csrf); err != nil {
@@ -352,7 +371,7 @@ func (s *SelfServiceClient) KickAllByMAC(myMAC string) (int, error) {
 // RADIUS accounting desync to actually take effect, but also clears any
 // other devices on the same account). A non-empty macFilter only kicks
 // sessions matching that MAC.
-func RunBypass(username string, macFilter string, verbose bool, checkAfter bool) (int, []SessionInfo, error) {
+func RunBypass(username string, macFilter string, verbose bool, checkAfter bool) (int, []sessionInfo, error) {
 	ss := NewSelfServiceClient()
 	ss.SetVerbose(verbose)
 

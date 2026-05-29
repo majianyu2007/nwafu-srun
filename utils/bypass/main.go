@@ -195,22 +195,17 @@ func main() {
 		fmt.Printf("%d session(s) online after kick:\n", len(sessions))
 		for _, sess := range sessions {
 			tag := ""
-			if client.MAC != "" && normalizeMACEqual(sess.MAC, client.MAC) {
+			if client.MAC != "" && srun.MACEqual(sess.MAC, client.MAC) {
 				tag = "  (your device)"
 			}
 			fmt.Printf("  id=%s mac=%s%s\n", sess.ID, sess.MAC, tag)
 		}
 		if !kickAll {
-			fmt.Println("Note: only your own MAC was kicked. Pass -a to kick ALL sessions and")
-			fmt.Println("      actually trigger the accounting desync.")
+			fmt.Println("Note: only the middle session of your device's MAC was kicked to bypass billing.")
+			fmt.Println("      Pass -a to kick ALL sessions.")
 		} else {
 			fmt.Println("Tip: newly created session(s) are typically NOT billed.")
 		}
 	}
 	fmt.Println("--- Done ---")
-}
-
-func normalizeMACEqual(a, b string) bool {
-	return strings.ReplaceAll(strings.ToLower(a), "-", ":") ==
-		strings.ReplaceAll(strings.ToLower(b), "-", ":")
 }

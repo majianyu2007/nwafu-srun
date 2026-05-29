@@ -6,49 +6,49 @@ import (
 	"os"
 )
 
-// Logger provides optional diagnostic output (typically to stderr).
-type Logger interface {
+// logger provides optional diagnostic output (typically to stderr).
+type logger interface {
 	Debugf(format string, args ...any)
 	Infof(format string, args ...any)
 	Warnf(format string, args ...any)
 }
 
-// NopLogger discards all log output.
-type NopLogger struct{}
+// nopLogger discards all log output.
+type nopLogger struct{}
 
-func (NopLogger) Debugf(string, ...any) {}
-func (NopLogger) Infof(string, ...any)  {}
-func (NopLogger) Warnf(string, ...any)  {}
+func (nopLogger) Debugf(string, ...any) {}
+func (nopLogger) Infof(string, ...any)  {}
+func (nopLogger) Warnf(string, ...any)  {}
 
-// VerboseLogger writes debug/info/warn lines to w when verbose is enabled.
-type VerboseLogger struct {
+// verboseLogger writes debug/info/warn lines to w when verbose is enabled.
+type verboseLogger struct {
 	verbose bool
 	w       io.Writer
 	prefix  string
 }
 
-// NewVerboseLogger creates a logger that writes to stderr when verbose is true.
-func NewVerboseLogger(verbose bool, prefix string) *VerboseLogger {
-	return &VerboseLogger{
+// newVerboseLogger creates a logger that writes to stderr when verbose is true.
+func newVerboseLogger(verbose bool, prefix string) *verboseLogger {
+	return &verboseLogger{
 		verbose: verbose,
 		w:       os.Stderr,
 		prefix:  prefix,
 	}
 }
 
-func (l *VerboseLogger) Debugf(format string, args ...any) {
+func (l *verboseLogger) Debugf(format string, args ...any) {
 	if l.verbose {
 		fmt.Fprintf(l.w, "[%s] "+format+"\n", append([]any{l.prefix}, args...)...)
 	}
 }
 
-func (l *VerboseLogger) Infof(format string, args ...any) {
+func (l *verboseLogger) Infof(format string, args ...any) {
 	if l.verbose {
 		fmt.Fprintf(l.w, "[%s] "+format+"\n", append([]any{l.prefix}, args...)...)
 	}
 }
 
-func (l *VerboseLogger) Warnf(format string, args ...any) {
+func (l *verboseLogger) Warnf(format string, args ...any) {
 	if l.verbose {
 		fmt.Fprintf(l.w, "[%s] WARN: "+format+"\n", append([]any{l.prefix}, args...)...)
 		return

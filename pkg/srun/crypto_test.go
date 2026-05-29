@@ -3,30 +3,18 @@ package srun
 import "testing"
 
 func TestHMACMD5Hex_deterministic(t *testing.T) {
-	got := HMACMD5Hex("password", "token")
-	want := HMACMD5Hex("password", "token")
+	got := hmacMD5Hex("password", "token")
+	want := hmacMD5Hex("password", "token")
 	if got != want || len(got) != 32 {
-		t.Fatalf("unexpected HMACMD5Hex: %q", got)
+		t.Fatalf("unexpected hmacMD5Hex: %q", got)
 	}
 }
 
 func TestSHA1Hex_deterministic(t *testing.T) {
-	got := SHA1Hex("test")
+	got := sha1Hex("test")
 	want := "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3"
 	if got != want {
-		t.Fatalf("SHA1Hex = %q, want %q", got, want)
-	}
-}
-
-func TestGetMD5_alias(t *testing.T) {
-	if GetMD5("p", "t") != HMACMD5Hex("p", "t") {
-		t.Fatal("GetMD5 alias mismatch")
-	}
-}
-
-func TestGetSha1_alias(t *testing.T) {
-	if GetSha1("test") != SHA1Hex("test") {
-		t.Fatal("GetSha1 alias mismatch")
+		t.Fatalf("sha1Hex = %q, want %q", got, want)
 	}
 }
 
