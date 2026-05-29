@@ -169,7 +169,7 @@ func (r Runtime) HasCredentials() bool {
 // FileForPersist builds the on-disk config from runtime state.
 //
 // Pipeline flags (force/bypass/all) are taken from cli when the user set them
-// on the command line; otherwise the values from fromDisk are kept so
+// on the command line; otherwise the values from 'fromDisk' are kept so
 // --save-config does not accidentally persist one-off merged flags.
 func FileForPersist(rt Runtime, cli CLIFlags, fromDisk File) File {
 	f := File{

@@ -156,7 +156,7 @@ func startInterruptMonitor() {
 }
 
 func checkInterrupt() bool {
-	fmt.Print("Press Enter within 2 seconds to enter interactive menu...")
+	fmt.Print("Press Enter within 2 seconds to enter the interactive menu...")
 	select {
 	case <-interruptChan:
 		fmt.Println("Interrupting auto-login...")
@@ -985,12 +985,12 @@ func interactiveRun(rt *config.Runtime) {
 			}
 			if err := client.LogOut(); err != nil {
 				fmt.Println("-----------------------------------------")
-				fmt.Println("             Fail to logout              ")
+				fmt.Println("             Logout failed               ")
 				printErr(err)
 				fmt.Println("-----------------------------------------")
 			} else {
 				fmt.Println("-----------------------------------------")
-				fmt.Println("           Logout successfully           ")
+				fmt.Println("          Logged out successfully        ")
 				fmt.Println("-----------------------------------------")
 			}
 			invalidateStatusCache()

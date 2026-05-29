@@ -338,7 +338,7 @@ var (
 	reMAC       = regexp.MustCompile(`"user_mac":"(([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})"`)
 )
 
-// loginSucceeded recognises Srun login success responses.
+// loginSucceeded recognizes Srun login success responses.
 //
 // Srun deployments are inconsistent about where the success marker lives:
 //   - Some return {"res":"ok"} or {"error":"ok"}.
@@ -435,7 +435,7 @@ func parseLoginInfo(strLoginInfo, ip string) (*LoginInfo, error) {
 
 // FormatLoginInfo returns a human-readable status block.
 func FormatLoginInfo(info *LoginInfo) string {
-	return formatLoginInfo(info, "Login successfully")
+	return formatLoginInfo(info, "Login successful")
 }
 
 // FormatStatusInfo returns a human-readable status block for status query.
@@ -498,7 +498,7 @@ func (c *Client) selfServiceLogOutInternal(quiet bool) error {
 		return fmt.Errorf("self-service kick failed: %w", err)
 	}
 	if kicked == 0 {
-		return errors.New("fail to logout: no sessions kicked")
+		return errors.New("failed to log out: no sessions kicked")
 	}
 	return nil
 }

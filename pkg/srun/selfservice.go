@@ -185,7 +185,7 @@ func (s *SelfServiceClient) GetSessions() (*csrfInfo, []sessionInfo, error) {
 		return nil, nil, fmt.Errorf("%w", err)
 	}
 
-	s.log.Debugf("found %d sessions", len(sessions))
+	s.log.Debugf("found %d session(s)", len(sessions))
 	return csrf, sessions, nil
 }
 
@@ -267,7 +267,7 @@ func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 		return 0, ErrNoSessionsToKick
 	}
 
-	s.log.Infof("Found %d online sessions before kick:", len(sessions))
+	s.log.Infof("Found %d online session(s) before kick:", len(sessions))
 	for _, sess := range sessions {
 		s.log.Infof("  - id=%s mac=%s", sess.ID, sess.MAC)
 	}
@@ -303,7 +303,7 @@ func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 		}
 		midIdx := len(group) / 2
 		targets = []sessionInfo{group[midIdx]}
-		s.log.Infof("Bypass mode (no -a): device %s has %d sessions, selecting middle one (ID: %s) to kick", myMAC, len(group), targets[0].ID)
+		s.log.Infof("Bypass mode (no -a): device %s has %d session(s), selecting middle one (ID: %s) to kick", myMAC, len(group), targets[0].ID)
 	} else {
 		// -a specified: kick the middle session of ALL MAC groups
 		for mac, group := range groups {
@@ -312,7 +312,7 @@ func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 			}
 			midIdx := len(group) / 2
 			targets = append(targets, group[midIdx])
-			s.log.Infof("Bypass mode (-a): device %s has %d sessions, selecting middle one (ID: %s) to kick", mac, len(group), group[midIdx].ID)
+			s.log.Infof("Bypass mode (-a): device %s has %d session(s), selecting middle one (ID: %s) to kick", mac, len(group), group[midIdx].ID)
 		}
 		s.log.Infof("Bypass mode (-a): selected %d middle session(s) from %d device(s) to kick", len(targets), len(groups))
 	}
@@ -332,7 +332,7 @@ func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 	}
 
 	if kicked < len(targets) {
-		s.log.Warnf("kicked %d/%d sessions", kicked, len(targets))
+		s.log.Warnf("kicked %d/%d session(s)", kicked, len(targets))
 	}
 	return kicked, nil
 }

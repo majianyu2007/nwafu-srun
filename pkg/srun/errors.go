@@ -32,19 +32,19 @@ func Hint(err error) string {
 	}
 	switch {
 	case errors.Is(err, ErrNotOnline):
-		return "Authenticate first (menu 1 or run with -u/-p). Check that you are on campus network."
+		return "Authenticate first (menu 1 or run with -u/-p). Check that you are on the campus network."
 	case errors.Is(err, ErrPortalUnreachable):
-		return "Cannot reach the portal. Check Wi-Fi/cable, DNS, or try again on campus network."
+		return "Cannot reach the portal. Check Wi-Fi/cable, DNS, or try again on the campus network."
 	case errors.Is(err, ErrSelfServiceUnreachable):
 		return "Cannot reach the self-service portal. If you are using a TUN-mode VPN/proxy (Clash, Mihomo, v2rayN, etc.), add 'service.nwafu.edu.cn' and 'portal.nwafu.edu.cn' to its direct/bypass rules."
 	case errors.Is(err, ErrSSORedirectedToLogin):
-		return "You don't appear to be authenticated on the portal. Run Login (menu 1) first, then retry bypass."
+		return "You don't appear to be authenticated on the portal. Run login (menu 1) first, then retry bypass."
 	case errors.Is(err, ErrCSRFParseFailed):
-		return "Self-service page layout may have changed, or SSO did not complete. Login on portal, then retry."
+		return "Self-service page layout may have changed, or SSO did not complete. Log in on the portal, then retry."
 	case errors.Is(err, ErrNoMatchingSession):
 		return "No session matches your device MAC. Confirm you are online, or use -a/--all to kick all devices on the account."
 	case errors.Is(err, ErrMACUndetected):
-		return "Could not read your device MAC from portal status. Login first, or use -a/--all if you intend to kick every session."
+		return "Could not read your device MAC from portal status. Log in first, or use -a/--all if you intend to kick every session."
 	case errors.Is(err, ErrAuthFailed):
 		return "Check username/password and ac_id (--acid). Use -v for response details on stderr."
 	case errors.Is(err, ErrKickFailed):
