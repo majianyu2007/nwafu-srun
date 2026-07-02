@@ -44,6 +44,7 @@ go build -o utils/bypass/bypass ./utils/bypass
 ./nwafu-srun -u USER -p PASS -f       # 强制重新登录（先登出已有会话再登录）
 ./nwafu-srun -u USER -p PASS -b       # 登录并执行计费绕过（默认仅下线本机 MAC 会话）
 ./nwafu-srun -u USER -p PASS -f -b -a # 强制重新登录，并绕过该账号下所有在线设备的计费
+./nwafu-srun -u USER -p PASS --bind-iface mv-student --bind-ip 10.130.6.94
 ```
 
 ### 交互模式
@@ -102,6 +103,8 @@ go build -o utils/bypass/bypass ./utils/bypass
   "username": "your_id",
   "password": "your_password",
   "acid": "1",
+  "bind_ip": "10.130.6.94",
+  "bind_interface": "mv-student",
   "auto_auth": true,
   "force": false,
   "bypass": false,
@@ -129,11 +132,41 @@ go build -o utils/bypass/bypass ./utils/bypass
 | `-b` | 登录后 bypass（默认仅踢自己 MAC 的会话） |
 | `-a` | 与 `-b` 配合：对账号下所有在线设备生效绕过计费（默认仅对本机生效） |
 | `--acid` | ac_id（默认 1） |
+| `--bind-ip` | 将 Portal / 自服务流量绑定到指定本地源 IP |
+| `--bind-iface` | 将 Portal / 自服务流量绑定到指定本地接口（仅 Linux；OpenWrt/macvlan 场景推荐） |
 | `--logout-mode` | 注销模式：`portal`（默认，网页注销）或 `selfservice`（自服务踢下线本机 MAC 会话） |
 | `-v` | 详细日志（stderr） |
 | `-h` | 帮助 |
 
 环境变量：`NWAFU_SRUN_USERNAME`、`NWAFU_SRUN_PASSWORD`。
+
+## macvlan / 路由器场景
+
+当路由器同时承载多个上游身份时，可通过 `--bind-iface` / `--bind-ip` 强制认证流量走指定接口，避免 Portal、自服务和 SSO 请求落到错误的 WAN。
+
+常见场景：
+
+- `eth0` 为校园网主链路
+- 在 `eth0` 上创建 `macvlan` 子接口 `mv-student`
+- `mv-student` 使用学号账号认证，以获取该会话对应的 IPv6 权限
+- 现有 IPv4/OpenClash 分流仍留在原有 WAN / 策略路由上
+
+示例：
+
+```bash
+./nwafu-srun \
+  -u STUDENT_ID \
+  -p PASSWORD \
+  --bind-iface mv-student \
+  --bind-ip 10.130.6.94
+```
+
+说明：
+
+- `--bind-iface` 通过 Linux `SO_BINDTODEVICE` 绑定出口接口。
+- `--bind-ip` 通过本地源地址约束连接，适合配合 `macvlan` 的独立 IPv4 地址使用。
+- 这两个参数同时作用于 Portal 登录、状态查询、自服务 SSO、bypass 与 `logout-mode=selfservice`。
+- 若只需固定到某个接口，`--bind-iface` 可单独使用；若本机存在复杂策略路由，建议两者同时指定。
 
 ## Bypass 命令行工具
 
@@ -146,6 +179,7 @@ go build -o utils/bypass/bypass ./utils/bypass
 ```bash
 ./utils/bypass/bypass -u USER           # 已在线时仅 bypass
 ./utils/bypass/bypass --login -u USER -p PASS
+./utils/bypass/bypass --login -u USER -p PASS --bind-iface mv-student --bind-ip 10.130.6.94
 ./utils/bypass/bypass                   # 从配置文件读取 username
 ```
 

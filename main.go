@@ -42,6 +42,8 @@ var (
 	saveConfig bool
 	menu       bool
 	logoutMode string
+	bindIP     string
+	bindIface  string
 )
 
 var (
@@ -78,6 +80,8 @@ func init() {
 	flag.BoolVar(&menu, "m", false, "Force interactive menu mode")
 	flag.BoolVar(&menu, "menu", false, "Force interactive menu mode")
 	flag.StringVar(&logoutMode, "logout-mode", "", "Logout mode: portal or selfservice")
+	flag.StringVar(&bindIP, "bind-ip", "", "Bind portal/self-service traffic to a local source IP")
+	flag.StringVar(&bindIface, "bind-iface", "", "Bind portal/self-service traffic to a local interface (Linux only)")
 }
 
 func guide(argv string) {
@@ -94,15 +98,17 @@ func guide(argv string) {
 	fmt.Printf("  -f               Logout before login\n")
 	fmt.Printf("  -b               Bypass billing after login (kicks own MAC only by default)\n")
 	fmt.Printf("  -a               With -b: kick ALL sessions on the account\n")
+	fmt.Printf("  --bind-ip        Bind portal/self-service traffic to a local source IP\n")
+	fmt.Printf("  --bind-iface     Bind portal/self-service traffic to a local interface (Linux only)\n")
 	fmt.Printf("  --acid, -v, -h   See README\n")
 	fmt.Printf("\nWith a saved config (auto_auth=true), running with no args performs auto-login.\n")
 }
 
 const (
-	colorReset    = "\033[0m"
-	colorBoldRed  = "\033[1;31m"
+	colorReset     = "\033[0m"
+	colorBoldRed   = "\033[1;31m"
 	colorBoldGreen = "\033[1;32m"
-	colorBoldCyan = "\033[1;36m"
+	colorBoldCyan  = "\033[1;36m"
 )
 
 var ansiRe = regexp.MustCompile(`\033\[[0-9;]*m`)
@@ -248,7 +254,6 @@ func readPassword(prompt string) (string, error) {
 
 const menuInnerWidth = 60
 
-
 func confirm(prompt string, defaultYes bool) bool {
 	def := "n"
 	if defaultYes {
@@ -368,6 +373,12 @@ func captureCLIFlags() config.CLIFlags {
 		case "acid":
 			f.AcIDSet = true
 			f.AcID = acid
+		case "bind-ip":
+			f.BindIPSet = true
+			f.BindIP = bindIP
+		case "bind-iface":
+			f.BindIfaceSet = true
+			f.BindInterface = bindIface
 		case "f", "force":
 			f.ForceSet = true
 			f.Force = force
@@ -393,6 +404,12 @@ func newClient(rt config.Runtime) *srun.Client {
 	c := srun.NewClient(rt.Username, rt.Password, rt.AcID)
 	c.SetVerbose(verbose)
 	c.LogoutMode = rt.LogoutMode
+	if err := c.SetBind(srun.BindOptions{
+		IP:        rt.BindIP,
+		Interface: rt.BindInterface,
+	}); err != nil {
+		fail(exitUsage, "invalid bind options: %v", err)
+	}
 	return c
 }
 
@@ -415,7 +432,7 @@ func runBypass(client *srun.Client, kickAll bool) error {
 		return fmt.Errorf("%w", srun.ErrMACUndetected)
 	}
 
-	kicked, sessions, err := srun.RunBypass(client.Username, macFilter, verbose, true)
+	kicked, sessions, err := srun.RunBypassWithBind(client.Username, macFilter, verbose, true, client.Bind)
 	if err != nil {
 		return err
 	}
@@ -828,6 +845,9 @@ func runManageSessions(client *srun.Client) error {
 	fmt.Println("\n--- Manage Active Sessions ---")
 	ss := srun.NewSelfServiceClient()
 	ss.SetVerbose(verbose)
+	if err := ss.SetBind(client.Bind); err != nil {
+		return err
+	}
 
 	fmt.Println("Connecting to self-service portal...")
 	if err := ss.SSOLogin(client.Username); err != nil {
@@ -1111,7 +1131,7 @@ func main() {
 				return
 			}
 		}
-		
+
 		err := nonInteractiveRun(rt)
 		if err != nil {
 			printErr(err)
@@ -1121,7 +1141,7 @@ func main() {
 			}
 			os.Exit(exitRuntime)
 		}
-		
+
 		if isAutoAuthOnly {
 			// Success: wait 2 seconds or until Enter is pressed
 			select {

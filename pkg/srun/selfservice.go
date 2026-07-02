@@ -19,6 +19,7 @@ import (
 type SelfServiceClient struct {
 	BaseURL string
 	log     logger
+	Bind    BindOptions
 
 	httpClient *http.Client
 }
@@ -29,10 +30,14 @@ func NewSelfServiceClient() *SelfServiceClient {
 	if err != nil {
 		jar = nil
 	}
+	httpClient, err := newSelfServiceHTTPClient(jar, BindOptions{})
+	if err != nil {
+		httpClient = &http.Client{Timeout: SelfServiceTimeout, Jar: jar}
+	}
 	return &SelfServiceClient{
 		BaseURL:    SelfServiceDomain,
 		log:        nopLogger{},
-		httpClient: newSelfServiceHTTPClient(jar),
+		httpClient: httpClient,
 	}
 }
 
@@ -48,6 +53,17 @@ func (s *SelfServiceClient) SetLogger(l logger) {
 // SetVerbose enables verbose logging to stderr.
 func (s *SelfServiceClient) SetVerbose(verbose bool) {
 	s.log = newVerboseLogger(verbose, "SelfService")
+}
+
+// SetBind configures the outbound source IP and/or interface used for
+// self-service requests. On Linux, Bind.Interface uses SO_BINDTODEVICE.
+func (s *SelfServiceClient) SetBind(opts BindOptions) error {
+	opts = opts.normalized()
+	if err := bindClientTransport(s.httpClient, opts); err != nil {
+		return err
+	}
+	s.Bind = opts
+	return nil
 }
 
 func (s *SelfServiceClient) probeAndSetBaseURL() {
@@ -369,8 +385,17 @@ func (s *SelfServiceClient) KickAllByMAC(myMAC string) (int, error) {
 // but also clears any other devices on the same account). A non-empty
 // macFilter only kicks sessions matching that MAC.
 func RunBypass(username string, macFilter string, verbose bool, checkAfter bool) (int, []sessionInfo, error) {
+	return RunBypassWithBind(username, macFilter, verbose, checkAfter, BindOptions{})
+}
+
+// RunBypassWithBind executes SSO + fake-MAC kick + optional session check
+// while forcing the self-service traffic onto a specific local IP/interface.
+func RunBypassWithBind(username string, macFilter string, verbose bool, checkAfter bool, bind BindOptions) (int, []sessionInfo, error) {
 	ss := NewSelfServiceClient()
 	ss.SetVerbose(verbose)
+	if err := ss.SetBind(bind); err != nil {
+		return 0, nil, err
+	}
 
 	if err := ss.SSOLogin(username); err != nil {
 		return 0, nil, fmt.Errorf("bypass SSO: %w", err)

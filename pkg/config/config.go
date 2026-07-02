@@ -16,6 +16,8 @@ type File struct {
 	Username           string `json:"username,omitempty"`
 	Password           string `json:"password,omitempty"`
 	AcID               string `json:"acid,omitempty"`
+	BindIP             string `json:"bind_ip,omitempty"`
+	BindInterface      string `json:"bind_interface,omitempty"`
 	AutoAuth           bool   `json:"auto_auth,omitempty"`
 	Force              bool   `json:"force,omitempty"`
 	Bypass             bool   `json:"bypass,omitempty"`
@@ -39,6 +41,10 @@ type CLIFlags struct {
 	Password      string
 	AcIDSet       bool
 	AcID          string
+	BindIPSet     bool
+	BindIP        string
+	BindIfaceSet  bool
+	BindInterface string
 	ForceSet      bool
 	Force         bool
 	BypassSet     bool
@@ -145,6 +151,12 @@ func Merge(rt *Runtime, cli CLIFlags, envUser, envPass string) Runtime {
 	if cli.AcIDSet && cli.AcID != "" {
 		out.AcID = cli.AcID
 	}
+	if cli.BindIPSet {
+		out.BindIP = cli.BindIP
+	}
+	if cli.BindIfaceSet {
+		out.BindInterface = cli.BindInterface
+	}
 	if cli.ForceSet {
 		out.Force = cli.Force
 	}
@@ -177,6 +189,8 @@ func FileForPersist(rt Runtime, cli CLIFlags, fromDisk File) File {
 		Username:           rt.Username,
 		Password:           rt.Password,
 		AcID:               rt.AcID,
+		BindIP:             rt.BindIP,
+		BindInterface:      rt.BindInterface,
 		AutoAuth:           rt.AutoAuth,
 		SavePromptDisabled: rt.SavePromptDisabled,
 	}

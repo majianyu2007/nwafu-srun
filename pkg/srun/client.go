@@ -34,6 +34,7 @@ type Client struct {
 	AcID       string
 	BaseURL    string
 	LogoutMode string
+	Bind       BindOptions
 
 	log        logger
 	httpClient *http.Client
@@ -45,13 +46,17 @@ func NewClient(username, password, acid string) *Client {
 	if err != nil {
 		jar = nil
 	}
+	httpClient, err := newPortalHTTPClient(jar, BindOptions{})
+	if err != nil {
+		httpClient = &http.Client{Timeout: PortalTimeout, Jar: jar}
+	}
 	return &Client{
 		Username:   username,
 		Password:   password,
 		AcID:       acid,
 		BaseURL:    PortalDomain,
 		log:        nopLogger{},
-		httpClient: newPortalHTTPClient(jar),
+		httpClient: httpClient,
 	}
 }
 
@@ -67,6 +72,17 @@ func (c *Client) SetLogger(l logger) {
 // SetVerbose enables or disables verbose logging via stderr.
 func (c *Client) SetVerbose(verbose bool) {
 	c.log = newVerboseLogger(verbose, "Portal")
+}
+
+// SetBind configures the outbound source IP and/or interface used for portal
+// requests. On Linux, Bind.Interface uses SO_BINDTODEVICE.
+func (c *Client) SetBind(opts BindOptions) error {
+	opts = opts.normalized()
+	if err := bindClientTransport(c.httpClient, opts); err != nil {
+		return err
+	}
+	c.Bind = opts
+	return nil
 }
 
 func (c *Client) ctx() context.Context {
@@ -415,7 +431,6 @@ func parseLoginInfo(strLoginInfo, ip string) (*LoginInfo, error) {
 		return nil, fmt.Errorf("%w: %s", ErrNotOnline, errInfo)
 	}
 
-
 	info := &LoginInfo{IP: ip, Balance: "0.00"}
 	if m := reUser.FindStringSubmatch(strLoginInfo); len(m) > 1 {
 		info.Username = m[1]
@@ -490,6 +505,9 @@ func (c *Client) selfServiceLogOutInternal(quiet bool) error {
 	}
 	selfSvc := NewSelfServiceClient()
 	selfSvc.SetLogger(c.log)
+	if err := selfSvc.SetBind(c.Bind); err != nil {
+		return err
+	}
 	if err := selfSvc.SSOLogin(c.Username); err != nil {
 		return fmt.Errorf("SSO failed: %w", err)
 	}

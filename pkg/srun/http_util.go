@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"io"
+	"net"
 	"net/http"
 	"time"
 )
 
-func newInsecureTransport() *http.Transport {
-	return &http.Transport{
+func newInsecureTransport(opts BindOptions) (*http.Transport, error) {
+	transport := &http.Transport{
 		// Explicitly do NOT use http.ProxyFromEnvironment.
 		//
 		// Both portal.nwafu.edu.cn and service.nwafu.edu.cn are campus-only
@@ -20,29 +21,50 @@ func newInsecureTransport() *http.Transport {
 		Proxy:           nil,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // campus fallback uses IP with mismatched cert
 	}
+	opts = opts.normalized()
+	if opts.IP == "" && opts.Interface == "" {
+		return transport, nil
+	}
+	dialContext, err := bindDialContext(opts)
+	if err != nil {
+		return nil, err
+	}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return dialContext(ctx, network, address)
+	}
+	return transport, nil
 }
 
 func newProbeClient() *http.Client {
+	transport, _ := newInsecureTransport(BindOptions{})
 	return &http.Client{
 		Timeout:   ProbeTimeout,
-		Transport: newInsecureTransport(),
+		Transport: transport,
 	}
 }
 
-func newPortalHTTPClient(jar http.CookieJar) *http.Client {
+func newPortalHTTPClient(jar http.CookieJar, opts BindOptions) (*http.Client, error) {
+	transport, err := newInsecureTransport(opts)
+	if err != nil {
+		return nil, err
+	}
 	return &http.Client{
-		Transport: newInsecureTransport(),
+		Transport: transport,
 		Timeout:   PortalTimeout,
 		Jar:       jar,
-	}
+	}, nil
 }
 
-func newSelfServiceHTTPClient(jar http.CookieJar) *http.Client {
+func newSelfServiceHTTPClient(jar http.CookieJar, opts BindOptions) (*http.Client, error) {
+	transport, err := newInsecureTransport(opts)
+	if err != nil {
+		return nil, err
+	}
 	return &http.Client{
-		Transport: newInsecureTransport(),
+		Transport: transport,
 		Timeout:   SelfServiceTimeout,
 		Jar:       jar,
-	}
+	}, nil
 }
 
 // probeURL returns true if GET url succeeds (any 2xx/3xx response).

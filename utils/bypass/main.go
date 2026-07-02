@@ -30,6 +30,8 @@ var (
 	help       bool
 	configPath string
 	noConfig   bool
+	bindIP     string
+	bindIface  string
 )
 
 var stdin = bufio.NewReader(os.Stdin)
@@ -49,6 +51,8 @@ func init() {
 	flag.BoolVar(&help, "help", false, "Help")
 	flag.StringVar(&configPath, "config", "", "Config file path")
 	flag.BoolVar(&noConfig, "no-config", false, "Ignore config files")
+	flag.StringVar(&bindIP, "bind-ip", "", "Bind portal/self-service traffic to a local source IP")
+	flag.StringVar(&bindIface, "bind-iface", "", "Bind portal/self-service traffic to a local interface (Linux only)")
 }
 
 func guide(argv string) {
@@ -56,7 +60,7 @@ func guide(argv string) {
 	fmt.Printf("  %s -u <username>              # bypass-only (must be online)\n", argv)
 	fmt.Printf("  %s -u <user> -p <pass> --login\n", argv)
 	fmt.Printf("  %s                            # username from config if saved\n", argv)
-	fmt.Printf("\nOptions: -u -p --login -a -v --config --no-config -h\n")
+	fmt.Printf("\nOptions: -u -p --login -a -v --bind-ip --bind-iface --config --no-config -h\n")
 	fmt.Printf("  -a         Kick ALL sessions on the account. By default, only sessions\n")
 	fmt.Printf("             matching this device's MAC are kicked. Kicking all can be more\n")
 	fmt.Printf("             reliable but also clears any other devices.\n")
@@ -119,6 +123,10 @@ func main() {
 			cli.PasswordSet = true
 		case "acid":
 			cli.AcIDSet = true
+		case "bind-ip":
+			cli.BindIPSet = true
+		case "bind-iface":
+			cli.BindIfaceSet = true
 		case "a", "all":
 			cli.AllSet = true
 		}
@@ -126,6 +134,8 @@ func main() {
 	cli.Username = username
 	cli.Password = password
 	cli.AcID = acid
+	cli.BindIP = bindIP
+	cli.BindInterface = bindIface
 	cli.All = all
 
 	rt := config.Merge(loaded, cli, os.Getenv(srun.EnvUsername), os.Getenv(srun.EnvPassword))
@@ -155,6 +165,9 @@ func main() {
 
 	client := srun.NewClient(rt.Username, rt.Password, rt.AcID)
 	client.SetVerbose(verbose)
+	if err := client.SetBind(srun.BindOptions{IP: rt.BindIP, Interface: rt.BindInterface}); err != nil {
+		fail(exitUsage, err)
+	}
 
 	if loginFirst {
 		if err := client.QuietLogOut(); err != nil {
@@ -183,7 +196,7 @@ func main() {
 	}
 
 	fmt.Println("\n--- Bypass ---")
-	kicked, sessions, err := srun.RunBypass(rt.Username, macFilter, verbose, true)
+	kicked, sessions, err := srun.RunBypassWithBind(rt.Username, macFilter, verbose, true, client.Bind)
 	if err != nil {
 		fail(exitRuntime, err)
 	}

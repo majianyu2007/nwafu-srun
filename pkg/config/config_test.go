@@ -10,11 +10,13 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	f := &File{
-		Version:  CurrentVersion,
-		Username: "user",
-		Password: "pass",
-		AcID:     "2",
-		AutoAuth: true,
+		Version:       CurrentVersion,
+		Username:      "user",
+		Password:      "pass",
+		AcID:          "2",
+		BindIP:        "192.0.2.10",
+		BindInterface: "macvlan0",
+		AutoAuth:      true,
 	}
 	if err := Save(path, f); err != nil {
 		t.Fatal(err)
@@ -26,11 +28,14 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if loaded.Username != "user" || loaded.Password != "pass" || !loaded.AutoAuth {
 		t.Fatalf("got %+v", loaded.File)
 	}
+	if loaded.BindIP != "192.0.2.10" || loaded.BindInterface != "macvlan0" {
+		t.Fatalf("bind config lost: %+v", loaded.File)
+	}
 }
 
 func TestMergePriority(t *testing.T) {
 	rt := &Runtime{
-		File: File{Username: "cfg", Password: "cfgpass", AcID: "1"},
+		File: File{Username: "cfg", Password: "cfgpass", AcID: "1", BindIP: "192.0.2.1", BindInterface: "cfg0"},
 	}
 	cli := CLIFlags{UsernameSet: true, Username: "cli"}
 	out := Merge(rt, cli, "", "")
@@ -44,6 +49,11 @@ func TestMergePriority(t *testing.T) {
 	out2 := Merge(rt, cli2, "env", "envpass")
 	if out2.Password != "clipass" {
 		t.Fatalf("password = %q", out2.Password)
+	}
+	cli3 := CLIFlags{BindIPSet: true, BindIP: "198.51.100.2", BindIfaceSet: true, BindInterface: "mv0"}
+	out3 := Merge(rt, cli3, "", "")
+	if out3.BindIP != "198.51.100.2" || out3.BindInterface != "mv0" {
+		t.Fatalf("bind override failed: %+v", out3.File)
 	}
 }
 

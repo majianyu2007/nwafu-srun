@@ -22,6 +22,9 @@ go build -o bypass ./utils/bypass
 # 完整流程
 ./bypass -u your_username -p your_password --login
 
+# 指定认证流量必须走某个接口/源地址
+./bypass -u your_username -p your_password --login --bind-iface mv-student --bind-ip 10.130.6.94
+
 # 对账号下所有在线设备生效绕过计费
 ./bypass -u your_username -a
 
@@ -45,3 +48,8 @@ go build -o bypass ./utils/bypass
 ## 环境变量
 
 `NWAFU_SRUN_USERNAME`、`NWAFU_SRUN_PASSWORD`（`--login` 时需要密码）。
+
+额外参数：
+
+- `--bind-iface <iface>`：将 Portal / 自服务流量绑定到指定 Linux 接口
+- `--bind-ip <ip>`：将 Portal / 自服务流量绑定到指定本地源 IP
