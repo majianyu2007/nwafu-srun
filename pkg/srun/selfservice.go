@@ -2,6 +2,7 @@ package srun
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -264,17 +265,48 @@ func (s *SelfServiceClient) KickSession(id, mac string, csrf *csrfInfo) error {
 	return lastErr
 }
 
-// fakeMAC is a fixed locally-administered MAC used to kick sessions.
-// The value is deliberately invalid so the RADIUS server cannot match
-// it to any real device, triggering the accounting desync.
-const fakeMAC = "02:00:00:00:00:00"
+// RandomFakeMAC generates a realistic locally administered unicast MAC address.
+// This avoids using fixed obvious patterns like "02:00:00:00:00:00" which can be
+// blacklisted or rejected by the RADIUS/self-service portal.
+func RandomFakeMAC() string {
+	buf := make([]byte, 6)
+	if _, err := rand.Read(buf); err != nil {
+		buf = []byte{0x02, 0x54, 0xab, 0x12, 0x34, 0x56}
+	}
+	buf[0] = (buf[0] | 0x02) & 0xfe // Locally administered, unicast
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5])
+}
 
-// KickAllWithFakeMAC kicks sessions using a fixed fake MAC.
-// If myMAC is non-empty, only sessions matching that MAC are kicked.
-//
-// Each session is kicked with the fixed invalid MAC (02:00:00:00:00:00)
-// to trigger the Srun accounting desync.
-func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
+// groupSessionsByMAC groups and sorts online sessions by MAC address.
+func groupSessionsByMAC(sessions []sessionInfo) map[string][]sessionInfo {
+	groups := make(map[string][]sessionInfo)
+	for _, sess := range sessions {
+		mac := NormalizeMAC(sess.MAC)
+		groups[mac] = append(groups[mac], sess)
+	}
+	for mac, group := range groups {
+		sort.Slice(group, func(i, j int) bool {
+			idI, errI := strconv.ParseInt(group[i].ID, 10, 64)
+			idJ, errJ := strconv.ParseInt(group[j].ID, 10, 64)
+			if errI == nil && errJ == nil {
+				return idI < idJ
+			}
+			return group[i].ID < group[j].ID
+		})
+		groups[mac] = group
+	}
+	return groups
+}
+
+// KickAllWithFakeMAC kicks sessions using a randomly generated fake MAC and verifies
+// that the targeted sessions are actually removed from the self-service online list.
+// If myMAC is non-empty, only sessions matching that MAC are targeted.
+// It retries up to maxRetries times if a session remains online.
+func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string, maxRetries int) (int, error) {
+	if maxRetries <= 0 {
+		maxRetries = DefaultBypassRetries
+	}
+
 	csrf, sessions, err := s.GetSessions()
 	if err != nil {
 		return 0, err
@@ -289,26 +321,7 @@ func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 	}
 
 	filterMAC := NormalizeMAC(myMAC)
-
-	// Group sessions by normalized MAC address
-	groups := make(map[string][]sessionInfo)
-	for _, sess := range sessions {
-		mac := NormalizeMAC(sess.MAC)
-		groups[mac] = append(groups[mac], sess)
-	}
-
-	// Sort each group numerically by Session ID
-	for mac, group := range groups {
-		sort.Slice(group, func(i, j int) bool {
-			idI, errI := strconv.ParseInt(group[i].ID, 10, 64)
-			idJ, errJ := strconv.ParseInt(group[j].ID, 10, 64)
-			if errI == nil && errJ == nil {
-				return idI < idJ
-			}
-			return group[i].ID < group[j].ID
-		})
-		groups[mac] = group
-	}
+	groups := groupSessionsByMAC(sessions)
 
 	var targets []sessionInfo
 	if filterMAC != "" {
@@ -343,22 +356,60 @@ func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 	}
 
 	kicked := 0
-	for _, sess := range targets {
-		if err := s.KickSession(sess.ID, fakeMAC, csrf); err != nil {
-			s.log.Warnf("failed to kick session %s with fake MAC %s: %v", sess.ID, fakeMAC, err)
-			continue
+	for _, target := range targets {
+		sessionKicked := false
+		var lastKickErr error
+
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			fakeMAC := RandomFakeMAC()
+			s.log.Infof("Kick attempt %d/%d for session %s (MAC: %s) using random fake MAC %s", attempt, maxRetries, target.ID, target.MAC, fakeMAC)
+
+			kickErr := s.KickSession(target.ID, fakeMAC, csrf)
+			if kickErr != nil {
+				lastKickErr = kickErr
+				s.log.Warnf("Kick request attempt %d/%d for session %s failed: %v", attempt, maxRetries, target.ID, kickErr)
+			}
+
+			// Short pause to allow RADIUS/portal to process deletion
+			sleep(BypassVerifyDelay)
+
+			// Verify if session actually disappeared
+			newCsrf, currentSessions, fetchErr := s.GetSessions()
+			if fetchErr != nil {
+				s.log.Warnf("Failed to fetch sessions for verification (attempt %d/%d): %v", attempt, maxRetries, fetchErr)
+				continue
+			}
+			csrf = newCsrf
+
+			stillOnline := false
+			for _, cs := range currentSessions {
+				if cs.ID == target.ID {
+					stillOnline = true
+					break
+				}
+			}
+
+			if !stillOnline {
+				s.log.Infof("Verified: session %s (MAC: %s) was successfully removed on attempt %d", target.ID, target.MAC, attempt)
+				sessionKicked = true
+				kicked++
+				break
+			}
+
+			s.log.Warnf("Verification failed: session %s is STILL online in self-service after attempt %d/%d", target.ID, attempt, maxRetries)
+			if attempt < maxRetries {
+				sleep(KickRetryGap)
+			}
 		}
-		s.log.Infof("Successfully kicked session %s (original MAC: %s) with fake MAC %s", sess.ID, sess.MAC, fakeMAC)
-		kicked++
+
+		if !sessionKicked {
+			if lastKickErr != nil {
+				return kicked, fmt.Errorf("bypass verification failed for session %s (MAC %s) after %d attempts: %w", target.ID, target.MAC, maxRetries, lastKickErr)
+			}
+			return kicked, fmt.Errorf("bypass verification failed for session %s (MAC %s): session remained online in self-service after %d attempts", target.ID, target.MAC, maxRetries)
+		}
 	}
 
-	if len(targets) > 0 && kicked == 0 {
-		return 0, fmt.Errorf("%w: all kick requests failed", ErrKickFailed)
-	}
-
-	if kicked < len(targets) {
-		s.log.Warnf("kicked %d/%d session(s)", kicked, len(targets))
-	}
 	return kicked, nil
 }
 
@@ -394,12 +445,12 @@ func (s *SelfServiceClient) KickAllByMAC(myMAC string) (int, error) {
 // but also clears any other devices on the same account). A non-empty
 // macFilter only kicks sessions matching that MAC.
 func RunBypass(username string, macFilter string, verbose bool, checkAfter bool) (int, []sessionInfo, error) {
-	return RunBypassWithBind(username, macFilter, verbose, checkAfter, BindOptions{})
+	return RunBypassWithBind(username, macFilter, verbose, checkAfter, BindOptions{}, DefaultBypassRetries)
 }
 
-// RunBypassWithBind executes SSO + fake-MAC kick + optional session check
+// RunBypassWithBind executes SSO + fake-MAC kick + verification
 // while forcing the self-service traffic onto a specific local IP/interface.
-func RunBypassWithBind(username string, macFilter string, verbose bool, checkAfter bool, bind BindOptions) (int, []sessionInfo, error) {
+func RunBypassWithBind(username string, macFilter string, verbose bool, checkAfter bool, bind BindOptions, maxRetries int) (int, []sessionInfo, error) {
 	ss := NewSelfServiceClient()
 	ss.SetVerbose(verbose)
 	if err := ss.SetBind(bind); err != nil {
@@ -410,7 +461,7 @@ func RunBypassWithBind(username string, macFilter string, verbose bool, checkAft
 		return 0, nil, fmt.Errorf("bypass SSO: %w", err)
 	}
 
-	kicked, err := ss.KickAllWithFakeMAC(macFilter)
+	kicked, err := ss.KickAllWithFakeMAC(macFilter, maxRetries)
 	if err != nil {
 		return 0, nil, fmt.Errorf("bypass kick: %w", err)
 	}

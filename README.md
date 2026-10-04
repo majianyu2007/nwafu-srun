@@ -32,7 +32,7 @@ go build -o utils/bypass/bypass ./utils/bypass
 
 ### 命令行直连（非交互模式）
 
-若满足以下任一条件，程序将直接执行登录/注销/绕过流程，不会进入交互式菜单：
+若满足以下任一条件，程序将直接执行登录/注销/绕过流程，即开即走（符合标准 Unix CLI 规范，无人工倒计时或非交互阻塞，便于作为服务或 Cron 任务常驻）：
 
 - 命令行指定了 `-u` 和 `-p` 参数
 - 环境变量中设置了 `NWAFU_SRUN_USERNAME` 和 `NWAFU_SRUN_PASSWORD`
@@ -40,16 +40,21 @@ go build -o utils/bypass/bypass ./utils/bypass
 - 已保存账号凭据，且命令行指定了 `-f`（重新登录）或 `-b`（绕过计费）参数
 
 ```bash
-./nwafu-srun -u USER -p PASS          # 直接登录
-./nwafu-srun -u USER -p PASS -f       # 强制重新登录（先登出已有会话再登录）
-./nwafu-srun -u USER -p PASS -b       # 登录并执行计费绕过（默认仅下线本机 MAC 会话）
-./nwafu-srun -u USER -p PASS -f -b -a # 强制重新登录，并绕过该账号下所有在线设备的计费
+./nwafu-srun -u USER -p PASS                 # 直接登录
+./nwafu-srun -u USER -p PASS -f              # 强制重新登录（先登出已有会话再登录）
+./nwafu-srun -u USER -p PASS -b              # 登录并执行计费绕过（默认仅下线本机 MAC 会话，带自检重试）
+./nwafu-srun -u USER -p PASS -b --retries 5  # 指定 bypass 校验重试次数为 5 次
+./nwafu-srun -u USER -p PASS -f -b -a        # 强制重新登录，并绕过该账号下所有在线设备的计费
 ./nwafu-srun -u USER -p PASS --bind-iface mv-student --bind-ip 10.130.6.94
 ```
 
 ### 交互模式
 
-无凭据时进入菜单：
+当无保存凭据或直接传入 `-m` / `--menu` 参数时进入交互菜单：
+
+```bash
+./nwafu-srun -m     # 即使开启了 auto_auth 也强制打开交互菜单
+```
 
 | 选项 | 功能 |
 |------|------|
@@ -57,7 +62,7 @@ go build -o utils/bypass/bypass ./utils/bypass
 | 2 | 强制重登（先登出再登录） |
 | 3 | 注销（根据配置选择常规 Portal 注销或自服务直接踢下线本机 MAC） |
 | 4 | 状态查询 |
-| 5 | Bypass 计费（询问是否踢光账户下所有会话） |
+| 5 | Bypass 计费（询问是否踢光账户下所有会话，带自动自检验证） |
 | 6 | 在线会话管理（连接自服务列出所有在线会话，可手动选择踢下线指定设备或一键全踢） |
 | 7 | 设置（保存凭据、切换 auto-auth / force / bypass / kick-all / logout-mode 并立即写入配置等） |
 | 8 | 修改本会话凭据（用户名/密码） |
@@ -71,11 +76,12 @@ go build -o utils/bypass/bypass ./utils/bypass
 ### 自动认证
 
 1. 交互模式登录成功后，选择保存配置并开启 `auto_auth`
-2. 此后直接运行 `nwafu-srun` / `nwafu-srun.exe`（无参数）即可自动登录
+2. 此后直接运行 `nwafu-srun` / `nwafu-srun.exe`（无参数）即可直接在后台自动登录完成并退出，无需任何人工等待
+3. 若此时需要进入交互菜单进行配置，只需传入 `-m` 或 `--menu` 参数即可
 
 在 **设置菜单（7）** 里也可切换 `force`（先登出）、`bypass`（登录后 bypass）、`kick-all`（等同 `-a`，会二次确认）、`logout-mode`（注销模式：portal 或 selfservice，后者用于强踢本机 MAC 会话以规避无感知自动重新登录），与 `auto_auth` 一样会立即写入配置文件。
 
-若配置文件中启用了 `auto_auth` 且设置了 `force` 或 `bypass`，无参数启动时将自动执行对应步骤。若需要进入菜单，请传入 `--no-config` 或 `-m` 参数。
+若配置文件中启用了 `auto_auth` 且设置了 `force` 或 `bypass`，无参数启动时将自动执行对应步骤。若需要进入菜单，请传入 `-m` 或 `--no-config` 参数。
 
 或通过命令行一次性写入配置：
 
@@ -131,6 +137,8 @@ go build -o utils/bypass/bypass ./utils/bypass
 | `-f` | 登录前登出 |
 | `-b` | 登录后 bypass（默认仅踢自己 MAC 的会话） |
 | `-a` | 与 `-b` 配合：对账号下所有在线设备生效绕过计费（默认仅对本机生效） |
+| `--retries` | Bypass 踢线后自服务在线列表确认与最大重试次数（默认 3） |
+| `-m`, `--menu` | 强制进入交互菜单模式（即使开启了 auto_auth） |
 | `--acid` | ac_id（默认 1） |
 | `--bind-ip` | 将 Portal / 自服务流量绑定到指定本地源 IP |
 | `--bind-iface` | 将 Portal / 自服务流量绑定到指定本地接口（仅 Linux；OpenWrt/macvlan 场景推荐） |
@@ -190,9 +198,10 @@ go build -o utils/bypass/bypass ./utils/bypass
 Bypass 的有效性依赖于断开在线会话并触发 RADIUS 计费服务状态不同步（Accounting Desync）：
 
 1. 通过 SSO 单点登录方式接入自服务门户，列出该账号当前的所有在线会话（通常不超过 3 个）。
-2. 对选定的在线会话，使用一个**固定的无效假 MAC** `02:00:00:00:00:00` 提交下线请求。
-3. 设备在本地 Portal 网关层并未真正断开，但 RADIUS 计费服务器已将其视为下线并停止统计流量。
-4. 随后重新登记或维持在线的会话，通常便不再计入费用。
+2. 对选定的在线会话，动态生成符合规范的**随机本地单播假 MAC**（避开固定 `02:00:00:00:00:00` 特征）提交下线请求。
+3. 提交后自动向自服务重新获取会话列表，**严格验证该目标会话是否已真正被下线移除**。若深澜自服务平台出现静默拒绝或未及时生效，会自动重试并更新 CSRF 令牌（最多重试 `--retries` 次，默认 3 次），避免因单次请求失败而发生计费残留。
+4. 设备在本地 Portal 网关层并未真正断开，但 RADIUS 计费服务器已将其视为下线并停止统计流量。
+5. 随后维持在线的免费基底会话，便不再累计计费流量。
 
 注意：
 

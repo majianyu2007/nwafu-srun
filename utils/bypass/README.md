@@ -51,5 +51,6 @@ go build -o bypass ./utils/bypass
 
 额外参数：
 
+- `--retries <num>`：Bypass 踢线后自服务在线列表确认与最大重试次数（默认 3）
 - `--bind-iface <iface>`：将 Portal / 自服务流量绑定到指定 Linux 接口
 - `--bind-ip <ip>`：将 Portal / 自服务流量绑定到指定本地源 IP

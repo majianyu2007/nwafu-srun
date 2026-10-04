@@ -34,7 +34,7 @@ pkg/srun/
 
 - Config path: `os.UserConfigDir()/nwafu-srun/config.json` (override with `--config`)
 - Merge priority: **CLI > env > file**
-- Non-interactive when: explicit `-u/-p`, `auto_auth` in config, or `-f`/`-b` with saved creds
+- Non-interactive when: explicit `-u/-p`, `auto_auth` in config, or `-f`/`-b` with saved creds (runs immediately without delays or stdin waits; pass `-m` / `--menu` to force interactive menu)
 - Passwords stored **plaintext**, mode `0600`, Windows hidden attribute on config file
 - Flags: `--no-config`, `--save-config`
 - Logout modes: `portal` (default), `selfservice` (SSO session kick for MAC bypass users)
@@ -55,8 +55,10 @@ Use `errors.Is` with sentinels in `errors.go`. Print `srun.Hint(err)` for user r
 |------|-------------|
 | `-u`, `-p` | Credentials |
 | `-f` | Pre-login logout |
-| `-b` | Post-login bypass |
+| `-b` | Post-login bypass (uses randomized fake MAC and verifies session removal) |
 | `-a` | Kick all devices on bypass |
+| `--retries` | Max verification retry attempts for bypass kick (default 3) |
+| `-m`, `--menu` | Force interactive menu mode |
 | `--logout-mode` | Set logout mode: `portal` or `selfservice` |
 | `--config`, `--no-config`, `--save-config` | Config file control |
 

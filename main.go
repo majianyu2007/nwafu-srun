@@ -44,6 +44,7 @@ var (
 	logoutMode string
 	bindIP     string
 	bindIface  string
+	retries    int
 )
 
 var (
@@ -69,6 +70,7 @@ func init() {
 	flag.BoolVar(&bypass, "bypass", false, "Bypass billing")
 	flag.BoolVar(&all, "a", false, "Kick ALL sessions on the account during bypass")
 	flag.BoolVar(&all, "all", false, "Kick ALL sessions on the account during bypass")
+	flag.IntVar(&retries, "retries", srun.DefaultBypassRetries, "Max retry attempts for bypass kick verification")
 	flag.StringVar(&acid, "acid", "1", "Access controller ID (ac_id)")
 	flag.BoolVar(&verbose, "v", false, "Verbose output (stderr)")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose output")
@@ -86,10 +88,10 @@ func init() {
 
 func guide(argv string) {
 	fmt.Printf("Usage:\n")
-	fmt.Printf("  Interactive (no credentials):\n")
-	fmt.Printf("    %s\n", argv)
+	fmt.Printf("  Interactive (menu or no credentials):\n")
+	fmt.Printf("    %s [-m]\n", argv)
 	fmt.Printf("  Non-interactive (credentials via flags, env, or config file):\n")
-	fmt.Printf("    %s -u <user> -p <pass> [-f] [-b [-a]] [--acid N] [-v]\n", argv)
+	fmt.Printf("    %s -u <user> -p <pass> [-f] [-b [-a]] [--retries N] [--acid N] [-v]\n", argv)
 	fmt.Printf("\nConfig:\n")
 	fmt.Printf("    %s --save-config   (uses -u/-p, env, or loaded config)\n", argv)
 	fmt.Printf("    %s --config <path>   %s --no-config\n", argv, argv)
@@ -98,6 +100,8 @@ func guide(argv string) {
 	fmt.Printf("  -f               Logout before login\n")
 	fmt.Printf("  -b               Bypass billing after login (kicks own MAC only by default)\n")
 	fmt.Printf("  -a               With -b: kick ALL sessions on the account\n")
+	fmt.Printf("  --retries        Max verification retry attempts for bypass kick (default 3)\n")
+	fmt.Printf("  -m, --menu       Force interactive menu mode\n")
 	fmt.Printf("  --bind-ip        Bind portal/self-service traffic to a local source IP\n")
 	fmt.Printf("  --bind-iface     Bind portal/self-service traffic to a local interface (Linux only)\n")
 	fmt.Printf("  --acid, -v, -h   See README\n")
@@ -149,28 +153,6 @@ func badge(v bool) string {
 		return "[" + colorBoldGreen + " ON " + colorReset + "]"
 	}
 	return "[" + colorBoldRed + " OFF " + colorReset + "]"
-}
-
-var interruptChan chan struct{}
-
-func startInterruptMonitor() {
-	interruptChan = make(chan struct{}, 1)
-	go func() {
-		_, _ = stdin.ReadString('\n')
-		interruptChan <- struct{}{}
-	}()
-}
-
-func checkInterrupt() bool {
-	fmt.Print("Press Enter within 2 seconds to enter the interactive menu...")
-	select {
-	case <-interruptChan:
-		fmt.Println("Interrupting auto-login...")
-		return true
-	case <-time.After(2 * time.Second):
-		fmt.Println()
-		return false
-	}
 }
 
 func getStatusHeader(client *srun.Client, rt *config.Runtime) (string, string) {
@@ -391,6 +373,9 @@ func captureCLIFlags() config.CLIFlags {
 		case "logout-mode":
 			f.LogoutModeSet = true
 			f.LogoutMode = logoutMode
+		case "retries":
+			f.RetriesSet = true
+			f.Retries = retries
 		}
 	})
 	return f
@@ -413,16 +398,14 @@ func newClient(rt config.Runtime) *srun.Client {
 	return c
 }
 
-// runBypass kicks sessions with a fixed fake MAC to bypass billing.
+// runBypass kicks sessions with a random fake MAC and verifies their removal to bypass billing.
 //
 // kickAll == false (default): only sessions matching this device's MAC are
-// kicked. Safer when the account is shared with other people but is less
-// likely to trigger the accounting desync because partial kicks may leave
-// some sessions intact.
+// kicked. Safer when the account is shared with other people.
 //
 // kickAll == true: kick every session under the account. Can be more reliable
 // and also clears any other devices/users on the same account.
-func runBypass(client *srun.Client, kickAll bool) error {
+func runBypass(client *srun.Client, kickAll bool, maxRetries int) error {
 	fmt.Println("\n--- Bypass Mode ---")
 	macFilter := client.MAC
 	if kickAll {
@@ -432,16 +415,16 @@ func runBypass(client *srun.Client, kickAll bool) error {
 		return fmt.Errorf("%w", srun.ErrMACUndetected)
 	}
 
-	kicked, sessions, err := srun.RunBypassWithBind(client.Username, macFilter, verbose, true, client.Bind)
+	kicked, sessions, err := srun.RunBypassWithBind(client.Username, macFilter, verbose, true, client.Bind, maxRetries)
 	if err != nil {
 		return err
 	}
 	if kicked == 0 {
 		fmt.Println("No sessions needed kicking (bypass already active).")
 	} else if kicked == 1 {
-		fmt.Println("Kicked 1 session with a fake MAC.")
+		fmt.Println("Kicked 1 session with a random fake MAC (verified).")
 	} else {
-		fmt.Printf("Kicked %d sessions with a fake MAC.\n", kicked)
+		fmt.Printf("Kicked %d sessions with a random fake MAC (verified).\n", kicked)
 	}
 
 	if len(sessions) == 0 {
@@ -483,7 +466,7 @@ func nonInteractiveRun(rt config.Runtime) error {
 	fmt.Print(srun.FormatLoginInfo(info))
 
 	if rt.Bypass {
-		if err := runBypass(client, rt.All); err != nil {
+		if err := runBypass(client, rt.All, rt.Retries); err != nil {
 			return err
 		}
 	}
@@ -1038,7 +1021,7 @@ func interactiveRun(rt *config.Runtime) {
 			fmt.Println("Bypass kicks your current device's session by default.")
 			fmt.Println("To kick every session under the account instead, use the kick-all (-a) flag.")
 			kickAll := confirm("Kick ALL sessions on this account?", false)
-			if err := runBypass(client, kickAll); err != nil {
+			if err := runBypass(client, kickAll, rt.Retries); err != nil {
 				printErr(err)
 				continue
 			}
@@ -1125,31 +1108,9 @@ func main() {
 	}
 
 	if wantPipeline {
-		isAutoAuthOnly := rt.AutoAuth && !explicitCLI && !pipelineFlags
-		if isAutoAuthOnly {
-			startInterruptMonitor()
-			if checkInterrupt() {
-				interactiveRun(&rt)
-				return
-			}
-		}
-
-		err := nonInteractiveRun(rt)
-		if err != nil {
+		if err := nonInteractiveRun(rt); err != nil {
 			printErr(err)
-			if isAutoAuthOnly {
-				fmt.Println("\nPress Enter to exit...")
-				<-interruptChan
-			}
 			os.Exit(exitRuntime)
-		}
-
-		if isAutoAuthOnly {
-			// Success: wait 2 seconds or until Enter is pressed
-			select {
-			case <-interruptChan:
-			case <-time.After(2 * time.Second):
-			}
 		}
 		return
 	}

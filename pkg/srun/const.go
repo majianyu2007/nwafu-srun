@@ -26,14 +26,16 @@ const (
 	LoginSettleDelay  = 1 * time.Second
 	LogoutSettleDelay = 3 * time.Second
 	BypassCheckDelay  = 2 * time.Second
+	BypassVerifyDelay = 500 * time.Millisecond
 	LoginInfoRetry    = 5
 	LoginInfoRetryGap = 500 * time.Millisecond
 
 	// Kick retry: useful when a TUN-mode VPN / proxy drops the first
 	// connection; a fast retry usually goes through. Does NOT help when the
 	// proxy outright blackholes campus traffic.
-	KickRetry    = 2
-	KickRetryGap = 800 * time.Millisecond
+	KickRetry            = 2
+	KickRetryGap         = 800 * time.Millisecond
+	DefaultBypassRetries = 3
 
 	// Env
 	EnvUsername = "NWAFU_SRUN_USERNAME"

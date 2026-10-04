@@ -184,3 +184,37 @@ func TestUnsupportedVersion(t *testing.T) {
 		t.Fatal("expected version error")
 	}
 }
+
+func TestMergeRetries(t *testing.T) {
+	rt := &Runtime{
+		File: File{Retries: 3},
+	}
+	cli := CLIFlags{RetriesSet: true, Retries: 5}
+	out := Merge(rt, cli, "", "")
+	if out.Retries != 5 {
+		t.Fatalf("expected retries=5, got %d", out.Retries)
+	}
+
+	cliNoRetries := CLIFlags{}
+	out2 := Merge(rt, cliNoRetries, "", "")
+	if out2.Retries != 3 {
+		t.Fatalf("expected retries=3 from disk, got %d", out2.Retries)
+	}
+}
+
+func TestFileForPersistRetries(t *testing.T) {
+	rt := Runtime{
+		File: File{Retries: 5},
+	}
+	cli := CLIFlags{RetriesSet: true, Retries: 5}
+	persisted := FileForPersist(rt, cli, File{Retries: 2})
+	if persisted.Retries != 5 {
+		t.Fatalf("expected retries=5, got %d", persisted.Retries)
+	}
+
+	cliNotSet := CLIFlags{}
+	persisted2 := FileForPersist(rt, cliNotSet, File{Retries: 2})
+	if persisted2.Retries != 2 {
+		t.Fatalf("expected retries=2 from disk, got %d", persisted2.Retries)
+	}
+}

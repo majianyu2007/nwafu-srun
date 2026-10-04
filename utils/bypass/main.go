@@ -32,6 +32,7 @@ var (
 	noConfig   bool
 	bindIP     string
 	bindIface  string
+	retries    int
 )
 
 var stdin = bufio.NewReader(os.Stdin)
@@ -44,6 +45,7 @@ func init() {
 	flag.BoolVar(&loginFirst, "login", false, "Full flow: logout, login, then bypass")
 	flag.BoolVar(&all, "a", false, "Kick ALL sessions on the account")
 	flag.BoolVar(&all, "all", false, "Kick ALL sessions on the account")
+	flag.IntVar(&retries, "retries", srun.DefaultBypassRetries, "Max retry attempts for bypass kick verification")
 	flag.StringVar(&acid, "acid", "1", "Access controller ID (--login only)")
 	flag.BoolVar(&verbose, "v", false, "Verbose output (stderr)")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose output")
@@ -60,10 +62,11 @@ func guide(argv string) {
 	fmt.Printf("  %s -u <username>              # bypass-only (must be online)\n", argv)
 	fmt.Printf("  %s -u <user> -p <pass> --login\n", argv)
 	fmt.Printf("  %s                            # username from config if saved\n", argv)
-	fmt.Printf("\nOptions: -u -p --login -a -v --bind-ip --bind-iface --config --no-config -h\n")
+	fmt.Printf("\nOptions: -u -p --login -a --retries -v --bind-ip --bind-iface --config --no-config -h\n")
 	fmt.Printf("  -a         Kick ALL sessions on the account. By default, only sessions\n")
 	fmt.Printf("             matching this device's MAC are kicked. Kicking all can be more\n")
 	fmt.Printf("             reliable but also clears any other devices.\n")
+	fmt.Printf("  --retries  Max verification retry attempts for bypass kick (default 3)\n")
 	fmt.Printf("Environment: %s, %s\n", srun.EnvUsername, srun.EnvPassword)
 }
 
@@ -129,6 +132,8 @@ func main() {
 			cli.BindIfaceSet = true
 		case "a", "all":
 			cli.AllSet = true
+		case "retries":
+			cli.RetriesSet = true
 		}
 	})
 	cli.Username = username
@@ -137,6 +142,7 @@ func main() {
 	cli.BindIP = bindIP
 	cli.BindInterface = bindIface
 	cli.All = all
+	cli.Retries = retries
 
 	rt := config.Merge(loaded, cli, os.Getenv(srun.EnvUsername), os.Getenv(srun.EnvPassword))
 	if rt.AcID == "" {
@@ -196,16 +202,16 @@ func main() {
 	}
 
 	fmt.Println("\n--- Bypass ---")
-	kicked, sessions, err := srun.RunBypassWithBind(rt.Username, macFilter, verbose, true, client.Bind)
+	kicked, sessions, err := srun.RunBypassWithBind(rt.Username, macFilter, verbose, true, client.Bind, rt.Retries)
 	if err != nil {
 		fail(exitRuntime, err)
 	}
 	if kicked == 0 {
 		fmt.Println("No sessions needed kicking (bypass already active).")
 	} else if kicked == 1 {
-		fmt.Println("Kicked 1 session with a fake MAC.")
+		fmt.Println("Kicked 1 session with a random fake MAC (verified).")
 	} else {
-		fmt.Printf("Kicked %d sessions with a fake MAC.\n", kicked)
+		fmt.Printf("Kicked %d sessions with a random fake MAC (verified).\n", kicked)
 	}
 
 	if len(sessions) == 0 {

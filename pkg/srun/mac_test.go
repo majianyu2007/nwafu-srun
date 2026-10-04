@@ -25,4 +25,3 @@ func TestMACEqual(t *testing.T) {
 		}
 	}
 }
-

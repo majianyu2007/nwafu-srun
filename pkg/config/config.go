@@ -24,6 +24,7 @@ type File struct {
 	All                bool   `json:"all,omitempty"`
 	SavePromptDisabled bool   `json:"save_prompt_disabled,omitempty"`
 	LogoutMode         string `json:"logout_mode,omitempty"`
+	Retries            int    `json:"retries,omitempty"`
 }
 
 // Runtime holds merged settings for the current process.
@@ -53,6 +54,8 @@ type CLIFlags struct {
 	All           bool
 	LogoutModeSet bool
 	LogoutMode    string
+	RetriesSet    bool
+	Retries       int
 }
 
 // LoadOptions controls config discovery.
@@ -169,6 +172,9 @@ func Merge(rt *Runtime, cli CLIFlags, envUser, envPass string) Runtime {
 	if cli.LogoutModeSet {
 		out.LogoutMode = cli.LogoutMode
 	}
+	if cli.RetriesSet {
+		out.Retries = cli.Retries
+	}
 	out.File.Sanitize()
 	return out
 }
@@ -215,6 +221,11 @@ func FileForPersist(rt Runtime, cli CLIFlags, fromDisk File) File {
 		f.LogoutMode = rt.LogoutMode
 	} else {
 		f.LogoutMode = fromDisk.LogoutMode
+	}
+	if cli.RetriesSet {
+		f.Retries = rt.Retries
+	} else {
+		f.Retries = fromDisk.Retries
 	}
 	f.Sanitize()
 	return f
