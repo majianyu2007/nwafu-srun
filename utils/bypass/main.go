@@ -202,7 +202,7 @@ func main() {
 	}
 
 	fmt.Println("\n--- Bypass ---")
-	kicked, sessions, err := srun.RunBypassWithBind(rt.Username, macFilter, verbose, true, client.Bind, rt.Retries)
+	kicked, sessions, err := srun.RunBypassWithBind(rt.Username, rt.Password, macFilter, verbose, true, client.Bind, rt.Retries)
 	if err != nil {
 		fail(exitRuntime, err)
 	}

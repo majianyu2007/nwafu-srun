@@ -2,6 +2,7 @@ package srun
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -74,12 +75,26 @@ func (s *SelfServiceClient) probeAndSetBaseURL() {
 	s.BaseURL = resolveBaseURL(SelfServiceDomain, SelfServiceFallback, "/site/sso", "https")
 }
 
-// SSOLogin performs SSO login to the self-service portal.
+// SSOLogin performs SSO login to the self-service portal using Mode B (online session only).
 func (s *SelfServiceClient) SSOLogin(username string) error {
+	return s.SSOLoginWithPassword(username, "")
+}
+
+// SSOLoginWithPassword performs SSO login. If password is provided,
+// Mode A (zh-CN:username:md5(password)) is used so it can authenticate
+// even if the client IP is not yet online.
+func (s *SelfServiceClient) SSOLoginWithPassword(username, password string) error {
 	s.probeAndSetBaseURL()
 
-	token := base64.StdEncoding.EncodeToString([]byte("zh-CN:" + username))
-	ssoURL := s.BaseURL + "/site/sso?data=" + token
+	var payload string
+	if password != "" {
+		h := md5.Sum([]byte(password))
+		payload = fmt.Sprintf("zh-CN:%s:%x", username, h)
+	} else {
+		payload = "zh-CN:" + username
+	}
+	token := base64.StdEncoding.EncodeToString([]byte(payload))
+	ssoURL := s.BaseURL + "/site/sso?data=" + url.QueryEscape(token)
 
 	resp, err := doRequest(s.httpClient, context.Background(), http.MethodGet, ssoURL, nil, nil, s.log)
 	if err != nil {
@@ -121,6 +136,7 @@ var (
 	csrfHiddenRe2    = regexp.MustCompile(`(?i)\bvalue\s*=\s*["']([^"']+)["'][^>]*\bname\s*=\s*["'](_csrf-[^"']+)["']`)
 	csrfNameOnlyRe   = regexp.MustCompile(`(?i)\bname\s*=\s*["'](_csrf-[^"']+)["']`)
 	deleteLinkRe     = regexp.MustCompile(`/home/delete\?id=(\d+)&(?:amp;)?user_mac=([^"&]+)`)
+	deleteMacAuthRe  = regexp.MustCompile(`/user/delete-mac-auth\?mac=([^"&]+)`)
 )
 
 func parseCSRF(html string) (*csrfInfo, error) {
@@ -204,6 +220,118 @@ func (s *SelfServiceClient) GetSessions() (*csrfInfo, []sessionInfo, error) {
 
 	s.log.Debugf("found %d session(s)", len(sessions))
 	return csrf, sessions, nil
+}
+
+// GetHTML fetches an arbitrary path relative to BaseURL.
+func (s *SelfServiceClient) GetHTML(path string) (string, error) {
+	resp, err := doRequest(s.httpClient, context.Background(), http.MethodGet, s.BaseURL+path, nil, nil, s.log)
+	if err != nil {
+		return "", wrapSelfServiceErr(err, "fetch "+path)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+// GetMACAuthList fetches /user/mac-auth and returns CSRF info + list of bound normalized MACs.
+func (s *SelfServiceClient) GetMACAuthList() (*csrfInfo, []string, error) {
+	html, err := s.GetHTML("/user/mac-auth")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	csrf, err := parseCSRF(html)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	matches := deleteMacAuthRe.FindAllStringSubmatch(html, -1)
+	var macs []string
+	for _, m := range matches {
+		rawMac, _ := url.QueryUnescape(m[1])
+		macs = append(macs, NormalizeMAC(rawMac))
+	}
+	return csrf, macs, nil
+}
+
+// UnbindMACAuth removes a MAC address from self-service MAC-Auth (无感知认证).
+func (s *SelfServiceClient) UnbindMACAuth(targetMAC string) error {
+	csrf, macs, err := s.GetMACAuthList()
+	if err != nil {
+		return err
+	}
+
+	normTarget := NormalizeMAC(targetMAC)
+	found := false
+	for _, m := range macs {
+		if m == normTarget {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.log.Infof("MAC %s is not in MAC-Auth list (already unbound)", targetMAC)
+		return nil
+	}
+
+	unbindURL := fmt.Sprintf("%s/user/delete-mac-auth?mac=%s", s.BaseURL, url.QueryEscape(targetMAC))
+	formData := url.Values{}
+	formData.Set(csrf.FieldName, csrf.Token)
+	extraHeaders := map[string]string{
+		"Content-Type": "application/x-www-form-urlencoded",
+		"Referer":      s.BaseURL + "/user/mac-auth",
+	}
+
+	resp, err := doRequest(s.httpClient, context.Background(), http.MethodPost, unbindURL, extraHeaders, strings.NewReader(formData.Encode()), s.log)
+	if err != nil {
+		return wrapSelfServiceErr(err, "unbind mac-auth")
+	}
+	defer resp.Body.Close()
+
+	s.log.Infof("Successfully unbound MAC %s from self-service MAC-Auth", targetMAC)
+	return nil
+}
+
+// BindMACAuth registers a MAC address to self-service MAC-Auth (无感知认证).
+func (s *SelfServiceClient) BindMACAuth(targetMAC, remark string) error {
+	csrf, macs, err := s.GetMACAuthList()
+	if err != nil {
+		return err
+	}
+
+	normTarget := NormalizeMAC(targetMAC)
+	for _, m := range macs {
+		if m == normTarget {
+			s.log.Infof("MAC %s is already bound in MAC-Auth", targetMAC)
+			return nil
+		}
+	}
+
+	bindURL := s.BaseURL + "/user/mac-auth"
+	formData := url.Values{}
+	formData.Set(csrf.FieldName, csrf.Token)
+	formData.Set("MacAuth[mac]", targetMAC)
+	if remark == "" {
+		remark = "nwafu-srun"
+	}
+	formData.Set("MacAuth[remark]", remark)
+
+	extraHeaders := map[string]string{
+		"Content-Type": "application/x-www-form-urlencoded",
+		"Referer":      s.BaseURL + "/user/mac-auth",
+	}
+
+	resp, err := doRequest(s.httpClient, context.Background(), http.MethodPost, bindURL, extraHeaders, strings.NewReader(formData.Encode()), s.log)
+	if err != nil {
+		return wrapSelfServiceErr(err, "bind mac-auth")
+	}
+	defer resp.Body.Close()
+
+	s.log.Infof("Successfully bound MAC %s to self-service MAC-Auth", targetMAC)
+	return nil
 }
 
 // KickSession sends POST /home/delete to kick a single session.
@@ -440,24 +568,20 @@ func (s *SelfServiceClient) KickAllByMAC(myMAC string) (int, error) {
 }
 
 // RunBypass executes SSO + fake-MAC kick + optional session check.
-//
-// macFilter == "" kicks every session under the account (can be more reliable,
-// but also clears any other devices on the same account). A non-empty
-// macFilter only kicks sessions matching that MAC.
-func RunBypass(username string, macFilter string, verbose bool, checkAfter bool) (int, []sessionInfo, error) {
-	return RunBypassWithBind(username, macFilter, verbose, checkAfter, BindOptions{}, DefaultBypassRetries)
+func RunBypass(username, password, macFilter string, verbose, checkAfter bool) (int, []sessionInfo, error) {
+	return RunBypassWithBind(username, password, macFilter, verbose, checkAfter, BindOptions{}, DefaultBypassRetries)
 }
 
 // RunBypassWithBind executes SSO + fake-MAC kick + verification
 // while forcing the self-service traffic onto a specific local IP/interface.
-func RunBypassWithBind(username string, macFilter string, verbose bool, checkAfter bool, bind BindOptions, maxRetries int) (int, []sessionInfo, error) {
+func RunBypassWithBind(username, password, macFilter string, verbose bool, checkAfter bool, bind BindOptions, maxRetries int) (int, []sessionInfo, error) {
 	ss := NewSelfServiceClient()
 	ss.SetVerbose(verbose)
 	if err := ss.SetBind(bind); err != nil {
 		return 0, nil, err
 	}
 
-	if err := ss.SSOLogin(username); err != nil {
+	if err := ss.SSOLoginWithPassword(username, password); err != nil {
 		return 0, nil, fmt.Errorf("bypass SSO: %w", err)
 	}
 
@@ -466,12 +590,22 @@ func RunBypassWithBind(username string, macFilter string, verbose bool, checkAft
 		return 0, nil, fmt.Errorf("bypass kick: %w", err)
 	}
 
+	// If macFilter is specified, unbind it from self-service MAC-Auth (无感知认证)
+	// to prevent the RADIUS core gateway from automatically re-issuing a metered session.
+	if macFilter != "" {
+		if unbindErr := ss.UnbindMACAuth(macFilter); unbindErr != nil {
+			ss.log.Warnf("post-bypass unbind MAC-Auth (%s): %v", macFilter, unbindErr)
+		} else {
+			ss.log.Infof("Successfully unbound MAC %s from self-service MAC-Auth", macFilter)
+		}
+	}
+
 	if !checkAfter {
 		return kicked, nil, nil
 	}
 
 	sleep(BypassCheckDelay)
-	if err := ss.SSOLogin(username); err != nil {
+	if err := ss.SSOLoginWithPassword(username, password); err != nil {
 		ss.log.Warnf("post-kick session check skipped (SSO): %v", err)
 		return kicked, nil, nil
 	}

@@ -572,3 +572,47 @@ func (c *Client) getBytes(urlStr string, extraHeaders map[string]string) ([]byte
 	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
 }
+
+// BindMACAuth binds this client's device MAC to self-service MAC-Auth (无感知认证).
+func (c *Client) BindMACAuth(remark string) error {
+	if c.MAC == "" {
+		if info, err := c.GetLoginInfo(); err == nil && info.MAC != "" {
+			c.MAC = info.MAC
+		}
+	}
+	if c.MAC == "" {
+		return fmt.Errorf("%w: cannot bind without device MAC", ErrMACUndetected)
+	}
+
+	ss := NewSelfServiceClient()
+	ss.SetLogger(c.log)
+	if err := ss.SetBind(c.Bind); err != nil {
+		return err
+	}
+	if err := ss.SSOLoginWithPassword(c.Username, c.Password); err != nil {
+		return fmt.Errorf("SSO failed: %w", err)
+	}
+	return ss.BindMACAuth(c.MAC, remark)
+}
+
+// UnbindMACAuth unbinds this client's device MAC from self-service MAC-Auth (无感知认证).
+func (c *Client) UnbindMACAuth() error {
+	if c.MAC == "" {
+		if info, err := c.GetLoginInfo(); err == nil && info.MAC != "" {
+			c.MAC = info.MAC
+		}
+	}
+	if c.MAC == "" {
+		return fmt.Errorf("%w: cannot unbind without device MAC", ErrMACUndetected)
+	}
+
+	ss := NewSelfServiceClient()
+	ss.SetLogger(c.log)
+	if err := ss.SetBind(c.Bind); err != nil {
+		return err
+	}
+	if err := ss.SSOLoginWithPassword(c.Username, c.Password); err != nil {
+		return fmt.Errorf("SSO failed: %w", err)
+	}
+	return ss.UnbindMACAuth(c.MAC)
+}

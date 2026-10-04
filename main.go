@@ -45,6 +45,8 @@ var (
 	bindIP     string
 	bindIface  string
 	retries    int
+	bindMAC    bool
+	unbindMAC  bool
 )
 
 var (
@@ -71,6 +73,8 @@ func init() {
 	flag.BoolVar(&all, "a", false, "Kick ALL sessions on the account during bypass")
 	flag.BoolVar(&all, "all", false, "Kick ALL sessions on the account during bypass")
 	flag.IntVar(&retries, "retries", srun.DefaultBypassRetries, "Max retry attempts for bypass kick verification")
+	flag.BoolVar(&bindMAC, "bind-mac", false, "Bind current device MAC to self-service MAC-Auth and exit")
+	flag.BoolVar(&unbindMAC, "unbind-mac", false, "Unbind current device MAC from self-service MAC-Auth and exit")
 	flag.StringVar(&acid, "acid", "1", "Access controller ID (ac_id)")
 	flag.BoolVar(&verbose, "v", false, "Verbose output (stderr)")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose output")
@@ -415,7 +419,7 @@ func runBypass(client *srun.Client, kickAll bool, maxRetries int) error {
 		return fmt.Errorf("%w", srun.ErrMACUndetected)
 	}
 
-	kicked, sessions, err := srun.RunBypassWithBind(client.Username, macFilter, verbose, true, client.Bind, maxRetries)
+	kicked, sessions, err := srun.RunBypassWithBind(client.Username, client.Password, macFilter, verbose, true, client.Bind, maxRetries)
 	if err != nil {
 		return err
 	}
@@ -1095,6 +1099,30 @@ func main() {
 
 	if saveConfig {
 		doSaveConfig(rt)
+		os.Exit(exitOK)
+	}
+
+	if bindMAC {
+		if !rt.HasCredentials() {
+			fail(exitUsage, "credentials required for bind-mac")
+		}
+		client := newClient(rt)
+		if err := client.BindMACAuth("nwafu-srun"); err != nil {
+			fail(exitRuntime, "bind MAC-Auth: %v", err)
+		}
+		fmt.Println("MAC successfully bound to MAC-Auth.")
+		os.Exit(exitOK)
+	}
+
+	if unbindMAC {
+		if !rt.HasCredentials() {
+			fail(exitUsage, "credentials required for unbind-mac")
+		}
+		client := newClient(rt)
+		if err := client.UnbindMACAuth(); err != nil {
+			fail(exitRuntime, "unbind MAC-Auth: %v", err)
+		}
+		fmt.Println("MAC successfully unbound from MAC-Auth.")
 		os.Exit(exitOK)
 	}
 
