@@ -45,8 +45,10 @@ var (
 	bindIP     string
 	bindIface  string
 	retries    int
-	bindMAC    bool
-	unbindMAC  bool
+	bindMAC      bool
+	unbindMAC    bool
+	listSessions bool
+	listMACAuth  bool
 )
 
 var (
@@ -75,6 +77,8 @@ func init() {
 	flag.IntVar(&retries, "retries", srun.DefaultBypassRetries, "Max retry attempts for bypass kick verification")
 	flag.BoolVar(&bindMAC, "bind-mac", false, "Bind current device MAC to self-service MAC-Auth and exit")
 	flag.BoolVar(&unbindMAC, "unbind-mac", false, "Unbind current device MAC from self-service MAC-Auth and exit")
+	flag.BoolVar(&listSessions, "sessions", false, "List active sessions from self-service as JSON and exit")
+	flag.BoolVar(&listMACAuth, "mac-auth-list", false, "List MAC-Auth bindings from self-service as JSON and exit")
 	flag.StringVar(&acid, "acid", "1", "Access controller ID (ac_id)")
 	flag.BoolVar(&verbose, "v", false, "Verbose output (stderr)")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose output")
@@ -1123,6 +1127,64 @@ func main() {
 			fail(exitRuntime, "unbind MAC-Auth: %v", err)
 		}
 		fmt.Println("MAC successfully unbound from MAC-Auth.")
+		os.Exit(exitOK)
+	}
+
+	if listSessions {
+		if !rt.HasCredentials() {
+			fail(exitUsage, "credentials required to list sessions")
+		}
+		client := newClient(rt)
+		ss := srun.NewSelfServiceClient()
+		ss.SetVerbose(verbose)
+		if err := ss.SetBind(client.Bind); err != nil {
+			fail(exitRuntime, "bind: %v", err)
+		}
+		if err := ss.SSOLoginWithPassword(client.Username, client.Password); err != nil {
+			fail(exitRuntime, "SSO login: %v", err)
+		}
+		_, sessions, err := ss.GetSessions()
+		if err != nil {
+			fail(exitRuntime, "get sessions: %v", err)
+		}
+		type sessionOut struct {
+			ID  string `json:"id"`
+			MAC string `json:"mac"`
+		}
+		out := make([]sessionOut, len(sessions))
+		for i, s := range sessions {
+			out[i] = sessionOut{ID: s.ID, MAC: s.MAC}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(out); err != nil {
+			fail(exitRuntime, "encode: %v", err)
+		}
+		os.Exit(exitOK)
+	}
+
+	if listMACAuth {
+		if !rt.HasCredentials() {
+			fail(exitUsage, "credentials required to list mac-auth")
+		}
+		client := newClient(rt)
+		ss := srun.NewSelfServiceClient()
+		ss.SetVerbose(verbose)
+		if err := ss.SetBind(client.Bind); err != nil {
+			fail(exitRuntime, "bind: %v", err)
+		}
+		if err := ss.SSOLoginWithPassword(client.Username, client.Password); err != nil {
+			fail(exitRuntime, "SSO login: %v", err)
+		}
+		_, macs, err := ss.GetMACAuthList()
+		if err != nil {
+			fail(exitRuntime, "get mac-auth: %v", err)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(macs); err != nil {
+			fail(exitRuntime, "encode: %v", err)
+		}
 		os.Exit(exitOK)
 	}
 
