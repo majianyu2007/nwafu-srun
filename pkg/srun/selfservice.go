@@ -70,7 +70,7 @@ func (s *SelfServiceClient) probeAndSetBaseURL() {
 	if s.BaseURL != "" && s.BaseURL != SelfServiceDomain {
 		return
 	}
-	s.BaseURL = resolveBaseURL(SelfServiceDomain, SelfServiceFallback, "/site/sso", "http")
+	s.BaseURL = resolveBaseURL(SelfServiceDomain, SelfServiceFallback, "/site/sso", "https")
 }
 
 // SSOLogin performs SSO login to the self-service portal.
@@ -317,13 +317,18 @@ func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 		if !exists || len(group) == 0 {
 			return 0, fmt.Errorf("%w: filter MAC %s", ErrNoMatchingSession, myMAC)
 		}
+		if len(group) <= 1 {
+			s.log.Infof("Device %s already has %d session(s) (bypass active); skipping kick", myMAC, len(group))
+			return 0, nil
+		}
 		midIdx := len(group) / 2
 		targets = []sessionInfo{group[midIdx]}
 		s.log.Infof("Bypass mode (no -a): device %s has %d session(s), selecting middle one (ID: %s) to kick", myMAC, len(group), targets[0].ID)
 	} else {
 		// -a specified: kick the middle session of ALL MAC groups
 		for mac, group := range groups {
-			if len(group) == 0 {
+			if len(group) <= 1 {
+				s.log.Infof("Device %s has %d session(s) (already bypassed); skipping", mac, len(group))
 				continue
 			}
 			midIdx := len(group) / 2
@@ -331,6 +336,10 @@ func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 			s.log.Infof("Bypass mode (-a): device %s has %d session(s), selecting middle one (ID: %s) to kick", mac, len(group), group[midIdx].ID)
 		}
 		s.log.Infof("Bypass mode (-a): selected %d middle session(s) from %d device(s) to kick", len(targets), len(groups))
+	}
+
+	if len(targets) == 0 {
+		return 0, nil
 	}
 
 	kicked := 0
@@ -343,7 +352,7 @@ func (s *SelfServiceClient) KickAllWithFakeMAC(myMAC string) (int, error) {
 		kicked++
 	}
 
-	if kicked == 0 {
+	if len(targets) > 0 && kicked == 0 {
 		return 0, fmt.Errorf("%w: all kick requests failed", ErrKickFailed)
 	}
 

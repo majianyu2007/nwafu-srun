@@ -436,7 +436,9 @@ func runBypass(client *srun.Client, kickAll bool) error {
 	if err != nil {
 		return err
 	}
-	if kicked == 1 {
+	if kicked == 0 {
+		fmt.Println("No sessions needed kicking (bypass already active).")
+	} else if kicked == 1 {
 		fmt.Println("Kicked 1 session with a fake MAC.")
 	} else {
 		fmt.Printf("Kicked %d sessions with a fake MAC.\n", kicked)
