@@ -42,10 +42,14 @@ go build -o utils/bypass/bypass ./utils/bypass
 ```bash
 ./nwafu-srun -u USER -p PASS                 # 直接登录
 ./nwafu-srun -u USER -p PASS -f              # 强制重新登录（先登出已有会话再登录）
-./nwafu-srun -u USER -p PASS -b              # 登录并执行计费绕过（默认仅下线本机 MAC 会话，带自检重试）
+./nwafu-srun -u USER -p PASS -b              # 登录并执行计费绕过（踢除多余计费会话，自检后自动解绑无感知认证，避免被重新计费）
 ./nwafu-srun -u USER -p PASS -b --retries 5  # 指定 bypass 校验重试次数为 5 次
 ./nwafu-srun -u USER -p PASS -f -b -a        # 强制重新登录，并绕过该账号下所有在线设备的计费
 ./nwafu-srun -u USER -p PASS --bind-iface mv-student --bind-ip 10.130.6.94
+./nwafu-srun -u USER -p PASS --sessions      # 以 JSON 格式输出当前自服务在线会话列表并退出
+./nwafu-srun -u USER -p PASS --mac-auth-list # 以 JSON 格式输出自服务无感知认证 MAC 列表并退出
+./nwafu-srun -u USER -p PASS --bind-mac      # 将本机/绑定网卡 MAC 注册到无感知认证
+./nwafu-srun -u USER -p PASS --unbind-mac    # 将本机/绑定网卡 MAC 从无感知认证解绑
 ```
 
 ### 交互模式
@@ -200,8 +204,9 @@ Bypass 的有效性依赖于断开在线会话并触发 RADIUS 计费服务状�
 1. 通过 SSO 单点登录方式接入自服务门户，列出该账号当前的所有在线会话（通常不超过 3 个）。
 2. 对选定的在线会话，动态生成符合规范的**随机本地单播假 MAC**（避开固定 `02:00:00:00:00:00` 特征）提交下线请求。
 3. 提交后自动向自服务重新获取会话列表，**严格验证该目标会话是否已真正被下线移除**。若深澜自服务平台出现静默拒绝或未及时生效，会自动重试并更新 CSRF 令牌（最多重试 `--retries` 次，默认 3 次），避免因单次请求失败而发生计费残留。
-4. 设备在本地 Portal 网关层并未真正断开，但 RADIUS 计费服务器已将其视为下线并停止统计流量。
-5. 随后维持在线的免费基底会话，便不再累计计费流量。
+4. 验证剔除成功后，**自动从自服务无感知认证（`/user/mac-auth`）中解绑该网卡 MAC**，阻断核心 RADIUS 网关后续因租约续期或链路轻微抖动自动重新派发 `0.5元/G` 计费会话。
+5. 设备在本地 Portal 网关层并未真正断开，但 RADIUS 计费服务器已将其视为下线并停止统计流量。
+6. 随后维持在线的免费基底会话，便不再累计计费流量。
 
 注意：
 
