@@ -411,7 +411,7 @@ func newClient(rt config.Runtime) *srun.Client {
 // and also clears any other devices/users on the same account.
 func runBypass(client *srun.Client, kickAll bool, maxRetries int) error {
 	fmt.Println("\n--- Bypass Mode ---")
-	macFilter := client.MAC
+	macFilter := client.EnsureMAC()
 	if kickAll {
 		macFilter = ""
 	}

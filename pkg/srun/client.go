@@ -490,13 +490,27 @@ func (c *Client) QuietLogOut() error {
 	return c.logOutInternal(true)
 }
 
-func (c *Client) selfServiceLogOutInternal(quiet bool) error {
-	if c.MAC == "" {
-		if info, err := c.GetLoginInfo(); err == nil && info.MAC != "" {
-			c.MAC = info.MAC
+// EnsureMAC returns the client's MAC address, resolving it from GetLoginInfo()
+// or the bound network interface if not already populated.
+func (c *Client) EnsureMAC() string {
+	if c.MAC != "" {
+		return c.MAC
+	}
+	if info, err := c.GetLoginInfo(); err == nil && info.MAC != "" {
+		c.MAC = info.MAC
+		return c.MAC
+	}
+	if c.Bind.Interface != "" {
+		if iface, err := net.InterfaceByName(c.Bind.Interface); err == nil && len(iface.HardwareAddr) > 0 {
+			c.MAC = NormalizeMAC(iface.HardwareAddr.String())
+			return c.MAC
 		}
 	}
-	if c.MAC == "" {
+	return ""
+}
+
+func (c *Client) selfServiceLogOutInternal(quiet bool) error {
+	if c.EnsureMAC() == "" {
 		return fmt.Errorf("%w: cannot kick sessions without device MAC", ErrMACUndetected)
 	}
 
@@ -575,12 +589,7 @@ func (c *Client) getBytes(urlStr string, extraHeaders map[string]string) ([]byte
 
 // BindMACAuth binds this client's device MAC to self-service MAC-Auth (无感知认证).
 func (c *Client) BindMACAuth(remark string) error {
-	if c.MAC == "" {
-		if info, err := c.GetLoginInfo(); err == nil && info.MAC != "" {
-			c.MAC = info.MAC
-		}
-	}
-	if c.MAC == "" {
+	if c.EnsureMAC() == "" {
 		return fmt.Errorf("%w: cannot bind without device MAC", ErrMACUndetected)
 	}
 
@@ -597,12 +606,7 @@ func (c *Client) BindMACAuth(remark string) error {
 
 // UnbindMACAuth unbinds this client's device MAC from self-service MAC-Auth (无感知认证).
 func (c *Client) UnbindMACAuth() error {
-	if c.MAC == "" {
-		if info, err := c.GetLoginInfo(); err == nil && info.MAC != "" {
-			c.MAC = info.MAC
-		}
-	}
-	if c.MAC == "" {
+	if c.EnsureMAC() == "" {
 		return fmt.Errorf("%w: cannot unbind without device MAC", ErrMACUndetected)
 	}
 
