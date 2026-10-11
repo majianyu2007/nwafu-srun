@@ -2,110 +2,117 @@
 
 ![CodeQL](https://github.com/majianyu2007/nwafu-srun/workflows/CodeQL/badge.svg)
 
-西北农林科技大学深澜认证工具，使用 Go 语言编写，提供跨平台独立可执行文件。
+西北农林科技大学深澜（Srun）校园网认证命令行工具，Go 编写，各平台均为单个静态可执行文件。
 
-支持交互式登录、信息查询、注销、bypass 计费，以及**配置文件自动认证**（无参数运行即可登录）。
+功能：
+
+- Portal 登录、注销、在线状态查询
+- 基于配置文件的自动认证（无参数运行即登录）
+- 自服务门户：在线会话查询与下线、无感知认证（MAC-Auth）绑定与解绑
+- 计费 bypass
+- 绑定出口接口或源地址（适用于路由器、macvlan 多账号场景）
+
+## 获取
+
+从 [Releases](https://github.com/majianyu2007/nwafu-srun/releases) 下载对应平台的可执行文件，或自行编译（需要 Go，版本见 `go.mod`）：
+
+```bash
+go build -o nwafu-srun .
+```
+
+`utils/build.sh`、`utils/build.bat` 会同时编译主程序与 `utils/bypass`，输出文件名带平台后缀。
 
 ## 快速开始
 
 ```bash
-# 1) 编译
-go build -o nwafu-srun .
-
-# 2) 直接登录
+# 登录
 ./nwafu-srun -u USER -p PASS
 
-# 3) 保存配置；在交互菜单 7（设置）中开启 auto-auth / bypass 等，或编辑 JSON 的 "auto_auth"
+# 保存凭据到配置文件
 ./nwafu-srun -u USER -p PASS --save-config
+
+# 进入交互菜单，在“7 设置”中开启 auto-auth
+./nwafu-srun -m
+
+# 此后无参数运行即自动登录
+./nwafu-srun
 ```
 
-## 编译
+## 运行模式
+
+### 非交互模式
+
+满足以下任一条件时，程序执行登录流程后直接退出，不等待任何输入，可用于脚本、cron、systemd：
+
+- 命令行同时给出 `-u` 与 `-p`
+- 配置文件中 `auto_auth` 为 `true` 且已保存用户名和密码（未指定 `-m`）
+- 已有凭据（来自配置文件或环境变量），且命令行给出 `-f` 或 `-b`
+
+执行顺序：`-f` 时先注销 → 登录 → `-b` 时执行 bypass。
 
 ```bash
-go build -o nwafu-srun .
-go build -o utils/bypass/bypass ./utils/bypass
+./nwafu-srun -u USER -p PASS                  # 登录
+./nwafu-srun -u USER -p PASS -f               # 先注销再登录
+./nwafu-srun -u USER -p PASS -b               # 登录后对本机执行 bypass
+./nwafu-srun -u USER -p PASS -b --retries 5   # bypass 校验最多重试 5 次
+./nwafu-srun -u USER -p PASS -f -b -a         # 先注销再登录，对账号下所有设备执行 bypass
 ```
 
-也可使用 `utils/build.sh` / `utils/build.bat`。
+### 自服务操作
 
-## 使用方式
-
-### 命令行直连（非交互模式）
-
-若满足以下任一条件，程序将直接执行登录/注销/绕过流程，即开即走（符合标准 Unix CLI 规范，无人工倒计时或非交互阻塞，便于作为服务或 Cron 任务常驻）：
-
-- 命令行指定了 `-u` 和 `-p` 参数
-- 环境变量中设置了 `NWAFU_SRUN_USERNAME` 和 `NWAFU_SRUN_PASSWORD`
-- 配置文件中 `auto_auth` 为 `true` 且已保存用户名和密码
-- 已保存账号凭据，且命令行指定了 `-f`（重新登录）或 `-b`（绕过计费）参数
+以下参数各自完成一次操作后退出，不执行登录。需要用户名和密码（来自命令行、环境变量或配置文件），自服务 SSO 使用密码认证，因此本机未在线时同样可用。
 
 ```bash
-./nwafu-srun -u USER -p PASS                 # 直接登录
-./nwafu-srun -u USER -p PASS -f              # 强制重新登录（先登出已有会话再登录）
-./nwafu-srun -u USER -p PASS -b              # 登录并执行计费绕过（踢除多余计费会话，自检后自动解绑无感知认证，避免被重新计费）
-./nwafu-srun -u USER -p PASS -b --retries 5  # 指定 bypass 校验重试次数为 5 次
-./nwafu-srun -u USER -p PASS -f -b -a        # 强制重新登录，并绕过该账号下所有在线设备的计费
-./nwafu-srun -u USER -p PASS --bind-iface mv-student --bind-ip 10.130.6.94
-./nwafu-srun -u USER -p PASS --sessions      # 以 JSON 格式输出当前自服务在线会话列表并退出
-./nwafu-srun -u USER -p PASS --mac-auth-list # 以 JSON 格式输出自服务无感知认证 MAC 列表并退出
-./nwafu-srun -u USER -p PASS --bind-mac      # 将本机/绑定网卡 MAC 注册到无感知认证
-./nwafu-srun -u USER -p PASS --unbind-mac    # 将本机/绑定网卡 MAC 从无感知认证解绑
+./nwafu-srun --sessions        # 以 JSON 输出账号下的在线会话
+./nwafu-srun --mac-auth-list   # 以 JSON 输出已绑定无感知认证的 MAC
+./nwafu-srun --bind-mac        # 将本机 MAC 绑定到无感知认证
+./nwafu-srun --unbind-mac      # 将本机 MAC 从无感知认证解绑
 ```
+
+输出示例：
+
+```json
+[
+  {
+    "id": "123456",
+    "mac": "aa:bb:cc:dd:ee:ff"
+  }
+]
+```
+
+本机 MAC 的获取顺序：Portal 在线信息 → `--bind-iface` 指定接口的硬件地址。两者都取不到时返回 `local MAC undetected`。绑定和解绑提交后会重新读取列表确认结果，未生效时返回 `MAC-Auth update failed`。
 
 ### 交互模式
 
-当无保存凭据或直接传入 `-m` / `--menu` 参数时进入交互菜单：
-
-```bash
-./nwafu-srun -m     # 即使开启了 auto_auth 也强制打开交互菜单
-```
+未保存凭据、或指定 `-m` / `--menu` 时进入交互菜单：
 
 | 选项 | 功能 |
 |------|------|
-| 1 | 登录（已在线时询问是否覆盖） |
-| 2 | 强制重登（先登出再登录） |
-| 3 | 注销（根据配置选择常规 Portal 注销或自服务直接踢下线本机 MAC） |
-| 4 | 状态查询 |
-| 5 | Bypass 计费（询问是否踢光账户下所有会话，带自动自检验证） |
-| 6 | 在线会话管理（连接自服务列出所有在线会话，可手动选择踢下线指定设备或一键全踢） |
-| 7 | 设置（保存凭据、切换 auto-auth / force / bypass / kick-all / logout-mode 并立即写入配置等） |
-| 8 | 修改本会话凭据（用户名/密码） |
-| 0 | 退出（`q` / `quit` / `exit` 亦可） |
+| 1 | 登录；已在线时询问是否重新登录 |
+| 2 | 强制重新登录（先注销再登录） |
+| 3 | 注销，方式由 `logout_mode` 决定 |
+| 4 | 查询在线状态 |
+| 5 | Bypass；执行前询问是否作用于账号下所有设备 |
+| 6 | 管理在线会话：列出自服务中的会话，可逐个或全部下线 |
+| 7 | 设置：auto-auth、force、bypass、kick-all、logout-mode、保存提示，修改后立即写入配置文件 |
+| 8 | 修改本次运行使用的用户名与密码 |
+| 0 | 退出（也可输入 `q` / `quit` / `exit`） |
 
-输入用户名和密码后会询问是否立即登录；登录成功则出现保存凭据提示（`y` / `n` / `never`）。`Ctrl+D` 安静退出。
-
-登录成功后可选择将凭据保存为配置文件。
-如果你不希望每次都看到“是否保存凭据”的提示，可在提示中输入 `never` 永久关闭（设置菜单可恢复）。
-
-### 自动认证
-
-1. 交互模式登录成功后，选择保存配置并开启 `auto_auth`
-2. 此后直接运行 `nwafu-srun` / `nwafu-srun.exe`（无参数）即可直接在后台自动登录完成并退出，无需任何人工等待
-3. 若此时需要进入交互菜单进行配置，只需传入 `-m` 或 `--menu` 参数即可
-
-在 **设置菜单（7）** 里也可切换 `force`（先登出）、`bypass`（登录后 bypass）、`kick-all`（等同 `-a`，会二次确认）、`logout-mode`（注销模式：portal 或 selfservice，后者用于强踢本机 MAC 会话以规避无感知自动重新登录），与 `auto_auth` 一样会立即写入配置文件。
-
-若配置文件中启用了 `auto_auth` 且设置了 `force` 或 `bypass`，无参数启动时将自动执行对应步骤。若需要进入菜单，请传入 `-m` 或 `--no-config` 参数。
-
-或通过命令行一次性写入配置：
-
-```bash
-./nwafu-srun -u USER -p PASS -f --save-config
-# 编辑生成的 JSON，将 "auto_auth" 设为 true
-```
+登录成功后会询问是否保存凭据，可选 `y` / `n` / `never`。选择 `never` 后不再提示，可在设置菜单中恢复。`Ctrl+D` 退出程序。
 
 ## 配置文件
 
-配置文件**始终**保存在当前用户目录（与可执行文件位置无关）：
+默认路径位于当前用户的配置目录，与可执行文件所在位置无关：
 
 | 平台 | 路径 |
 |------|------|
-| Linux/macOS | `~/.config/nwafu-srun/config.json`（或 `$XDG_CONFIG_HOME/nwafu-srun/config.json`） |
+| Linux | `~/.config/nwafu-srun/config.json`（设置了 `$XDG_CONFIG_HOME` 时位于其下） |
+| macOS | `~/Library/Application Support/nwafu-srun/config.json` |
 | Windows | `%AppData%\nwafu-srun\config.json` |
 
-读取：`--config <path>` 指定其他文件；否则使用上述用户目录。`--no-config` 禁用。
+`--config <path>` 指定其他文件，`--no-config` 不读写任何配置文件。
 
-示例：
+参数优先级：命令行 > 环境变量 > 配置文件。
 
 ```json
 {
@@ -119,188 +126,190 @@ go build -o utils/bypass/bypass ./utils/bypass
   "force": false,
   "bypass": false,
   "all": false,
-  "logout_mode": "portal"
+  "logout_mode": "portal",
+  "retries": 3
 }
 ```
 
-**安全说明**：密码以**明文**存储，文件权限为 `0600`（Windows 另设隐藏属性）。请勿在共享账户或公共计算机上保存配置。可使用 `--no-config` 禁用读写。
-
-### 配置相关 CLI
-
-| Flag | 说明 |
+| 字段 | 说明 |
 |------|------|
-| `--config <path>` | 指定配置文件 |
-| `--no-config` | 忽略所有配置文件 |
-| `--save-config` | 将当前合并后的配置写入用户目录（可用已加载的 config 提供凭据；`all` 仅在 `bypass` 为真时写入） |
+| `auto_auth` | 无参数运行时直接执行非交互登录 |
+| `force` | 登录前先注销，等同 `-f` |
+| `bypass` | 登录后执行 bypass，等同 `-b` |
+| `all` | bypass 作用于账号下所有设备，等同 `-a`；仅在 `bypass` 为 `true` 时写入 |
+| `logout_mode` | `portal` 或 `selfservice`，见下文 |
+| `retries` | bypass 校验重试次数，等同 `--retries` |
+| `save_prompt_disabled` | 登录后不再询问是否保存凭据 |
 
-## 选项一览
+`--save-config` 将当前合并后的设置写入配置文件后退出。
 
-| Flag | 说明 |
+**安全说明**：密码以明文保存，文件权限为 `0600`，Windows 下另设隐藏属性。不要在共用的计算机或账户上保存配置。
+
+### 注销模式
+
+- `portal`（默认）：调用 Portal 注销接口。
+- `selfservice`：登录自服务门户，下线与本机 MAC 匹配的所有会话。适用于已绑定无感知认证、Portal 注销后会被自动重新认证的设备。
+
+## 参数
+
+| 参数 | 说明 |
 |------|------|
-| `-u`, `-p` | 用户名 / 密码 |
-| `-f` | 登录前登出 |
-| `-b` | 登录后 bypass（默认仅踢自己 MAC 的会话） |
-| `-a` | 与 `-b` 配合：对账号下所有在线设备生效绕过计费（默认仅对本机生效） |
-| `--retries` | Bypass 踢线后自服务在线列表确认与最大重试次数（默认 3） |
-| `-m`, `--menu` | 强制进入交互菜单模式（即使开启了 auto_auth） |
-| `--acid` | ac_id（默认 1） |
-| `--bind-ip` | 将 Portal / 自服务流量绑定到指定本地源 IP |
-| `--bind-iface` | 将 Portal / 自服务流量绑定到指定本地接口（仅 Linux；OpenWrt/macvlan 场景推荐） |
-| `--logout-mode` | 注销模式：`portal`（默认，网页注销）或 `selfservice`（自服务踢下线本机 MAC 会话） |
-| `-v` | 详细日志（stderr） |
-| `-h` | 帮助 |
+| `-u`, `--username` | 用户名 |
+| `-p`, `--password` | 密码 |
+| `-f`, `--force` | 登录前先注销 |
+| `-b`, `--bypass` | 登录后执行 bypass，默认只作用于本机 |
+| `-a`, `--all` | 与 `-b` 配合，作用于账号下所有设备 |
+| `--retries N` | bypass 下线后的校验重试次数，默认 3 |
+| `-m`, `--menu` | 强制进入交互菜单 |
+| `--acid N` | Portal 的 `ac_id`，默认 1 |
+| `--logout-mode` | 注销模式：`portal` 或 `selfservice` |
+| `--bind-ip IP` | Portal 与自服务请求使用的本地源地址 |
+| `--bind-iface IFACE` | Portal 与自服务请求使用的出口接口（仅 Linux） |
+| `--sessions` | 输出在线会话（JSON）后退出 |
+| `--mac-auth-list` | 输出无感知认证 MAC 列表（JSON）后退出 |
+| `--bind-mac` | 绑定本机 MAC 到无感知认证后退出 |
+| `--unbind-mac` | 从无感知认证解绑本机 MAC 后退出 |
+| `--config PATH` | 指定配置文件 |
+| `--no-config` | 不读写配置文件 |
+| `--save-config` | 保存配置后退出 |
+| `-v`, `--verbose` | 在 stderr 输出 HTTP 请求等调试信息 |
+| `-h`, `--help` | 显示帮助 |
 
 环境变量：`NWAFU_SRUN_USERNAME`、`NWAFU_SRUN_PASSWORD`。
 
-## macvlan / 路由器场景
+## Bypass
 
-当路由器同时承载多个上游身份时，可通过 `--bind-iface` / `--bind-ip` 强制认证流量走指定接口，避免 Portal、自服务和 SSO 请求落到错误的 WAN。
+### 流程
 
-常见场景：
+1. 使用账号密码通过 SSO 登录自服务门户，读取在线会话列表。
+2. 按 MAC 对会话分组。同一 MAC 只有一个会话时视为已处于 bypass 状态，不做处理；有多个会话时选取按 ID 排序的中间一个作为目标。
+3. 以随机生成的本地管理单播 MAC 提交下线请求。
+4. 重新读取会话列表，确认目标会话已消失；未消失则刷新 CSRF 令牌后重试，最多 `--retries` 次。
+5. 未使用 `-a` 时，从无感知认证列表中解绑本机 MAC，防止网关为该 MAC 重新建立计费会话。解绑失败只输出警告，不影响 bypass 结果。
+6. 输出操作后的在线会话列表。
 
-- `eth0` 为校园网主链路
-- 在 `eth0` 上创建 `macvlan` 子接口 `mv-student`
-- `mv-student` 使用学号账号认证，以获取该会话对应的 IPv6 权限
-- 现有 IPv4/OpenClash 分流仍留在原有 WAN / 策略路由上
+默认只处理本机 MAC 的会话。`-a` 处理账号下所有 MAC，会影响共用该账号的其他设备；在设置菜单中开启 kick-all 时会要求确认。
 
-示例：
+### 注意事项
 
-```bash
-./nwafu-srun \
-  -u STUDENT_ID \
-  -p PASSWORD \
-  --bind-iface mv-student \
-  --bind-ip 10.130.6.94
-```
+- 只需在每次登录后执行一次，不需要循环执行。
+- 设备重新接入网络（Wi-Fi 重连、网线插拔）后会建立新的会话，需要重新执行。
+- 若此前依赖无感知认证自动上线，bypass 解绑后需重新使用 Portal 登录，或执行 `--bind-mac` 重新绑定。
 
-说明：
+> **免责声明**：Bypass 的效果取决于校园网认证系统的策略，本项目不保证在任何环境下都有效。请自行到自服务门户核实计费状态，因 bypass 未生效产生的费用与本项目无关。
 
-- `--bind-iface` 通过 Linux `SO_BINDTODEVICE` 绑定出口接口。
-- `--bind-ip` 通过本地源地址约束连接，适合配合 `macvlan` 的独立 IPv4 地址使用。
-- 这两个参数同时作用于 Portal 登录、状态查询、自服务 SSO、bypass 与 `logout-mode=selfservice`。
-- 若只需固定到某个接口，`--bind-iface` 可单独使用；若本机存在复杂策略路由，建议两者同时指定。
+### 独立 bypass 工具
 
-## Bypass 命令行工具
-
-源码位于 `utils/bypass/`，**不会**随 GitHub Release 发布预编译包；需要请自行编译：
+`utils/bypass` 是只执行 bypass 的精简版本，不包含在 Release 中，需自行编译：
 
 ```bash
 go build -o utils/bypass/bypass ./utils/bypass
 ```
 
+用法见 [utils/bypass/README.md](utils/bypass/README.md)。
+
+## 路由器与 macvlan
+
+路由器上有多个上游接口时，可用 `--bind-iface` / `--bind-ip` 将认证相关请求固定到指定接口，避免 Portal、SSO、自服务请求从错误的出口发出。
+
+典型场景：在校园网接口 `eth0` 上创建 macvlan 子接口 `mv-student`，用学号账号在该子接口上认证以获得 IPv6，原有 IPv4 路由与分流保持不变。
+
 ```bash
-./utils/bypass/bypass -u USER           # 已在线时仅 bypass
-./utils/bypass/bypass --login -u USER -p PASS
-./utils/bypass/bypass --login -u USER -p PASS --bind-iface mv-student --bind-ip 10.130.6.94
-./utils/bypass/bypass                   # 从配置文件读取 username
+./nwafu-srun -u STUDENT_ID -p PASSWORD --bind-iface mv-student --bind-ip 10.130.6.94
 ```
 
-详见 [utils/bypass/README.md](utils/bypass/README.md)。
+- `--bind-iface` 通过 `SO_BINDTODEVICE` 绑定出口接口，仅 Linux 支持；Linux 5.7 之前的内核需要 root 或 `CAP_NET_RAW` 权限。
+- `--bind-ip` 指定连接的本地源地址，各平台均可使用。
+- 两者作用于 Portal 登录、状态查询、注销、SSO、bypass 及自服务操作。存在策略路由时建议同时指定。
+- 指定 `--bind-iface` 且 Portal 未返回 MAC 时，程序使用该接口的硬件地址作为本机 MAC。
 
-### Bypass 工作原理
+## 错误提示
 
-Bypass 的有效性依赖于断开在线会话并触发 RADIUS 计费服务状态不同步（Accounting Desync）：
+出错时程序在 stderr 输出 `Error:`，已知错误另附 `Hint:`。加 `-v` 可查看 HTTP 详情。
 
-1. 通过 SSO 单点登录方式接入自服务门户，列出该账号当前的所有在线会话（通常不超过 3 个）。
-2. 对选定的在线会话，动态生成符合规范的**随机本地单播假 MAC**（避开固定 `02:00:00:00:00:00` 特征）提交下线请求。
-3. 提交后自动向自服务重新获取会话列表，**严格验证该目标会话是否已真正被下线移除**。若深澜自服务平台出现静默拒绝或未及时生效，会自动重试并更新 CSRF 令牌（最多重试 `--retries` 次，默认 3 次），避免因单次请求失败而发生计费残留。
-4. 验证剔除成功后，**自动从自服务无感知认证（`/user/mac-auth`）中解绑该网卡 MAC**，阻断核心 RADIUS 网关后续因租约续期或链路轻微抖动自动重新派发 `0.5元/G` 计费会话。
-5. 设备在本地 Portal 网关层并未真正断开，但 RADIUS 计费服务器已将其视为下线并停止统计流量。
-6. 随后维持在线的免费基底会话，便不再累计计费流量。
+| 错误 | 含义 | 处理 |
+|------|------|------|
+| `not online` | 本机未认证 | 先登录 |
+| `portal unreachable` | 无法连接 Portal | 检查网络连接与 DNS |
+| `self-service unreachable` | 无法连接自服务门户 | 检查代理软件的直连规则 |
+| `SSO redirected to login` | 自服务 SSO 被拒绝 | 检查密码，或先在 Portal 登录 |
+| `CSRF parse failed` | 自服务页面解析失败 | 页面结构可能已变化，加 `-v` 查看响应 |
+| `local MAC undetected` | 无法确定本机 MAC | 先登录，或指定 `--bind-iface`，或使用 `-a` |
+| `no session matched the given MAC` | 没有与本机 MAC 匹配的会话 | 确认本机在线，或使用 `-a` |
+| `no online sessions to kick` | 自服务中没有在线会话 | 确认已登录 |
+| `MAC-Auth update failed` | 无感知认证绑定或解绑未生效 | 用 `--mac-auth-list` 检查，或在自服务网页上操作 |
+| `auth failed` | 认证失败 | 检查用户名、密码和 `--acid` |
+| `kick session failed` | 下线请求失败 | 重试，加 `-v` 查看详情 |
 
-注意：
-
-- **单设备与全账号绕过**：默认仅会踢除与本机 MAC 对应的会话（即仅使本机生效绕过计费，不影响其他设备）。若希望该账号下的**所有设备**都同时生效绕过，则需要附加 `-a` 参数（或在菜单中确认全踢），使该账号下的所有在线设备均触发踢线。
-- **设备短暂断开**：被踢线的设备会经历非常短暂的下线并自动重新登记上线。该机制并不需要“持续高频踢线”，只需在登录或断网重连后执行一次成功的踢线操作即可。
-- **重连失效风险**：当设备断网并重新连接校园网（例如 Wi-Fi 断开重连、有线网线拔插）后，系统会建立全新的计费会话，绕过可能会因此失效。建议在每次网络重连后重新执行一次本工具，或者手动登录自服务门户确认当前的计费状态。
-
-> **免责声明**：Bypass 功能的实际效果取决于校园网认证系统的策略与配置，本项目不保证其在所有环境、所有时间均能生效。使用者应在使用后自行验证计费是否已被绕过，因 bypass 失败产生的流量费用与本项目无关。
-
-## 错误自检
-
-失败时除 `Error:` 外会打印 `Hint:` 建议：
-
-| 错误类型 | 含义 | 建议 |
-|----------|------|------|
-| `not online` | 未认证 | 先执行登录（菜单 1） |
-| `portal unreachable` | 无法连接认证页 | 检查校园网 / DNS |
-| `SSO redirected to login` | 自服务 SSO 失败 | 先 Portal 登录再 bypass |
-| `local MAC undetected` | 无法获取本机 MAC 地址 | 先登录获取 MAC，或使用 `-a` 全踢 |
-| `no session matched the given MAC` | 没有匹配本机 MAC 的会话 | 确认本机已在线，或使用 `-a` 全踢 |
-| `no online sessions to kick` | 自服务里看不到任何在线会话 | 先 Portal 登录使会话注册到 RADIUS |
-| `auth failed` | 账号密码错误 | 检查凭据与 `--acid` |
-| `kick session failed` / `context deadline exceeded` / `198.18.x.x` | 代理软件（TUN 模式 / fake-IP）拦截了校内流量 | 在 Clash / Mihomo / v2rayN / Surge 等代理软件里把 `service.nwafu.edu.cn`、`portal.nwafu.edu.cn` 与 `172.26.0.0/16` 加入直连 / bypass 规则，或临时关闭代理后重试 |
-
-使用 `-v` 可在 stderr 查看 HTTP 详情。
+错误信息中含有 `198.18.`、`connection reset`、`forcibly closed` 或请求超时，通常是 TUN 模式或 fake-IP 模式的代理软件（Clash、Mihomo、v2rayN、Surge 等）接管了校内流量。请将 `portal.nwafu.edu.cn`、`service.nwafu.edu.cn` 和 `172.26.0.0/16` 加入直连规则，或临时关闭代理。
 
 ## 退出码
 
 | 码 | 含义 |
 |----|------|
 | 0 | 成功 |
-| 1 | 运行时错误（认证/网络/bypass 失败） |
+| 1 | 运行时错误（认证、网络、bypass、自服务操作失败） |
 | 2 | 参数或配置错误 |
 
-## 后台运行与断线重连守护
+## 定时运行
 
-本程序未内置后台守护进程（Daemon）模式，但可以通过系统级的定时任务或服务管理器轻松实现**开机自启**和**断线重连检测**。
+程序不常驻后台，每次运行完成一次认证即退出。需要掉线自动重连时，可由系统定时任务周期性调用。以下示例均要求已保存凭据并开启 `auto_auth`。
 
-### 1. 使用 Cron 定时检查（Linux / macOS 推荐）
-
-配置 Cron 定时任务，每分钟检查一次网络状态，如果掉线则自动重连。
-
-编辑 crontab (`crontab -e`)，添加以下规则：
+### cron（Linux / macOS）
 
 ```cron
-# 每分钟执行一次检测与自动认证（请使用绝对路径，且必须已在设置菜单中保存凭据并开启 auto_auth）
-* * * * * /path/to/nwafu-srun >> /tmp/nwafu-srun-keep.log 2>&1
+*/5 * * * * /path/to/nwafu-srun >> /tmp/nwafu-srun.log 2>&1
 ```
 
-### 2. 使用 Systemd 作为服务常驻后台（Linux）
+### systemd timer（Linux）
 
-在 `/etc/systemd/system/nwafu-srun.service` 创建服务文件：
+`/etc/systemd/system/nwafu-srun.service`：
 
 ```ini
 [Unit]
-Description=NWAFU SRUN Portal Autoconnect Client
-After=network.target
+Description=NWAFU Srun portal authentication
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=simple
-ExecStart=/path/to/nwafu-srun
-# 如果断开，等待 10 秒后自动重启（配合已保存的 auto_auth=true 规则）
-Restart=always
-RestartSec=10
+Type=oneshot
 User=your_username
-Environment=HOME=/home/your_username
-
-[Install]
-WantedBy=multi-user.target
+ExecStart=/path/to/nwafu-srun
 ```
 
-然后启用服务：
+`/etc/systemd/system/nwafu-srun.timer`：
+
+```ini
+[Unit]
+Description=Run nwafu-srun periodically
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+```
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable nwafu-srun.service
-sudo systemctl start nwafu-srun.service
+sudo systemctl enable --now nwafu-srun.timer
 ```
 
-### 3. 使用 Windows 任务计划程序（Windows）
+配置文件按 `User=` 指定用户的配置目录读取。也可在 `ExecStart` 中加 `--config /path/to/config.json` 指定。
 
-1. 打开**任务计划程序** (Task Scheduler)。
-2. 创建一个新任务，触发器设置为 **“当任何用户登录时”**。
-3. 操作设置为 **“启动程序”**，指向 `nwafu-srun.exe`，不加任何参数（前提是已使用交互菜单 `7` 保存配置并开启了 `auto_auth`）。
-4. 在**设置**选项卡中，勾选 **“如果任务失败，重新启动”**，并可以配置为每小时或断网时重复运行。
+### Windows 任务计划程序
 
-或者使用第三方小工具 `NSSM` (nssm.cc) 将其注册为 Windows 后台 Service 服务，配置为 `Restart: always`。
+新建任务，触发器选择“登录时”或按固定间隔重复，操作为启动 `nwafu-srun.exe`，不加参数。
 
 ## 开发
 
 ```bash
-go test ./...
 go vet ./...
+go test ./...
 ```
+
+推送 `v*` 标签后，GitHub Actions 运行测试、编译各平台静态二进制并创建 Release。
 
 ## 许可
 
