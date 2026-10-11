@@ -63,3 +63,49 @@ func TestRandomFakeMAC(t *testing.T) {
 		t.Logf("warning: consecutive random MACs were identical: %s (rare but possible)", mac1)
 	}
 }
+
+func TestParseMACAuthPage(t *testing.T) {
+	html := `<html><head>
+<meta name="csrf-param" content="_csrf-8800">
+<meta name="csrf-token" content="tok123">
+</head><body>
+<a href="/user/delete-mac-auth?mac=AA-BB-CC-DD-EE-01" data-method="post">删除</a>
+<a href="/user/delete-mac-auth?mac=aa%3Abb%3Acc%3Add%3Aee%3A02" data-method="post">删除</a>
+<a href="/user/delete-mac-auth?mac=AA-BB-CC-DD-EE-01" data-method="post">删除</a>
+</body></html>`
+
+	csrf, entries, err := parseMACAuthPage(html)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if csrf.FieldName != "_csrf-8800" || csrf.Token != "tok123" {
+		t.Fatalf("csrf = %+v", csrf)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries (deduplicated), got %d: %+v", len(entries), entries)
+	}
+	if entries[0].MAC != "aa:bb:cc:dd:ee:01" || entries[0].Raw != "AA-BB-CC-DD-EE-01" {
+		t.Fatalf("entry 0 = %+v", entries[0])
+	}
+	if entries[1].MAC != "aa:bb:cc:dd:ee:02" {
+		t.Fatalf("entry 1 = %+v", entries[1])
+	}
+
+	if e, ok := findMACAuthEntry(entries, "AA:BB:CC:DD:EE:02"); !ok || e.Raw != "aa:bb:cc:dd:ee:02" {
+		t.Fatalf("findMACAuthEntry = %+v, %v", e, ok)
+	}
+	if _, ok := findMACAuthEntry(entries, "aa:bb:cc:dd:ee:03"); ok {
+		t.Fatal("unexpected match")
+	}
+}
+
+func TestParseMACAuthPageEmpty(t *testing.T) {
+	html := `<meta name="csrf-param" content="_csrf"><meta name="csrf-token" content="t">`
+	_, entries, err := parseMACAuthPage(html)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no entries, got %+v", entries)
+	}
+}

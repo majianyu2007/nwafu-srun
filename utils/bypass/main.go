@@ -59,9 +59,9 @@ func init() {
 
 func guide(argv string) {
 	fmt.Printf("Usage:\n")
-	fmt.Printf("  %s -u <username>              # bypass-only (must be online)\n", argv)
+	fmt.Printf("  %s -u <user> [-p <pass>]      # bypass only (must be online)\n", argv)
 	fmt.Printf("  %s -u <user> -p <pass> --login\n", argv)
-	fmt.Printf("  %s                            # username from config if saved\n", argv)
+	fmt.Printf("  %s                            # credentials from config if saved\n", argv)
 	fmt.Printf("\nOptions: -u -p --login -a --retries -v --bind-ip --bind-iface --config --no-config -h\n")
 	fmt.Printf("  -a         Kick ALL sessions on the account. By default, only sessions\n")
 	fmt.Printf("             matching this device's MAC are kicked. Kicking all can be more\n")
@@ -193,7 +193,7 @@ func main() {
 		fmt.Print(srun.FormatLoginInfo(info))
 	}
 
-	macFilter := client.MAC
+	macFilter := client.EnsureMAC()
 	if kickAll {
 		macFilter = ""
 	}

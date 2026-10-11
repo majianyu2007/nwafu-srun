@@ -236,101 +236,158 @@ func (s *SelfServiceClient) GetHTML(path string) (string, error) {
 	return string(body), nil
 }
 
-// GetMACAuthList fetches /user/mac-auth and returns CSRF info + list of bound normalized MACs.
-func (s *SelfServiceClient) GetMACAuthList() (*csrfInfo, []string, error) {
-	html, err := s.GetHTML("/user/mac-auth")
-	if err != nil {
-		return nil, nil, err
-	}
+// macAuthEntry is a MAC address bound to self-service MAC-Auth.
+// Raw keeps the server's original spelling for use in delete URLs.
+type macAuthEntry struct {
+	MAC string
+	Raw string
+}
 
+// parseMACAuthPage extracts CSRF info and bound MACs from /user/mac-auth HTML.
+func parseMACAuthPage(html string) (*csrfInfo, []macAuthEntry, error) {
 	csrf, err := parseCSRF(html)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	matches := deleteMacAuthRe.FindAllStringSubmatch(html, -1)
-	var macs []string
-	for _, m := range matches {
-		rawMac, _ := url.QueryUnescape(m[1])
-		macs = append(macs, NormalizeMAC(rawMac))
+	var entries []macAuthEntry
+	seen := make(map[string]bool)
+	for _, m := range deleteMacAuthRe.FindAllStringSubmatch(html, -1) {
+		raw, err := url.QueryUnescape(m[1])
+		if err != nil {
+			raw = m[1]
+		}
+		mac := NormalizeMAC(raw)
+		if seen[mac] {
+			continue
+		}
+		seen[mac] = true
+		entries = append(entries, macAuthEntry{MAC: mac, Raw: raw})
+	}
+	return csrf, entries, nil
+}
+
+func (s *SelfServiceClient) getMACAuthPage() (*csrfInfo, []macAuthEntry, error) {
+	html, err := s.GetHTML("/user/mac-auth")
+	if err != nil {
+		return nil, nil, err
+	}
+	return parseMACAuthPage(html)
+}
+
+// GetMACAuthList fetches /user/mac-auth and returns CSRF info + list of bound normalized MACs.
+func (s *SelfServiceClient) GetMACAuthList() (*csrfInfo, []string, error) {
+	csrf, entries, err := s.getMACAuthPage()
+	if err != nil {
+		return nil, nil, err
+	}
+	macs := make([]string, len(entries))
+	for i, e := range entries {
+		macs[i] = e.MAC
 	}
 	return csrf, macs, nil
 }
 
-// UnbindMACAuth removes a MAC address from self-service MAC-Auth (无感知认证).
+func findMACAuthEntry(entries []macAuthEntry, mac string) (macAuthEntry, bool) {
+	norm := NormalizeMAC(mac)
+	for _, e := range entries {
+		if e.MAC == norm {
+			return e, true
+		}
+	}
+	return macAuthEntry{}, false
+}
+
+// postMACAuthForm submits a MAC-Auth form and checks the response for errors.
+func (s *SelfServiceClient) postMACAuthForm(targetURL string, form url.Values, op string) error {
+	extraHeaders := map[string]string{
+		"Content-Type": "application/x-www-form-urlencoded",
+		"Referer":      s.BaseURL + "/user/mac-auth",
+	}
+	resp, err := doRequest(s.httpClient, context.Background(), http.MethodPost, targetURL, extraHeaders, strings.NewReader(form.Encode()), s.log)
+	if err != nil {
+		return wrapSelfServiceErr(err, op)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%s: read response: %w", op, err)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("%w: %s: HTTP %d", ErrMACAuthFailed, op, resp.StatusCode)
+	}
+	if kickResponseIndicatesError(string(body)) {
+		return fmt.Errorf("%w: %s: server rejected request", ErrMACAuthFailed, op)
+	}
+	return nil
+}
+
+// UnbindMACAuth removes a MAC address from self-service MAC-Auth (无感知认证)
+// and verifies that it no longer appears in the list.
 func (s *SelfServiceClient) UnbindMACAuth(targetMAC string) error {
-	csrf, macs, err := s.GetMACAuthList()
+	csrf, entries, err := s.getMACAuthPage()
 	if err != nil {
 		return err
 	}
 
-	normTarget := NormalizeMAC(targetMAC)
-	found := false
-	for _, m := range macs {
-		if m == normTarget {
-			found = true
-			break
-		}
-	}
+	entry, found := findMACAuthEntry(entries, targetMAC)
 	if !found {
 		s.log.Infof("MAC %s is not in MAC-Auth list (already unbound)", targetMAC)
 		return nil
 	}
 
-	unbindURL := fmt.Sprintf("%s/user/delete-mac-auth?mac=%s", s.BaseURL, url.QueryEscape(targetMAC))
+	unbindURL := fmt.Sprintf("%s/user/delete-mac-auth?mac=%s", s.BaseURL, url.QueryEscape(entry.Raw))
 	formData := url.Values{}
 	formData.Set(csrf.FieldName, csrf.Token)
-	extraHeaders := map[string]string{
-		"Content-Type": "application/x-www-form-urlencoded",
-		"Referer":      s.BaseURL + "/user/mac-auth",
+	if err := s.postMACAuthForm(unbindURL, formData, "unbind mac-auth"); err != nil {
+		return err
 	}
 
-	resp, err := doRequest(s.httpClient, context.Background(), http.MethodPost, unbindURL, extraHeaders, strings.NewReader(formData.Encode()), s.log)
+	_, entries, err = s.getMACAuthPage()
 	if err != nil {
-		return wrapSelfServiceErr(err, "unbind mac-auth")
+		return fmt.Errorf("verify unbind: %w", err)
 	}
-	defer resp.Body.Close()
+	if _, still := findMACAuthEntry(entries, targetMAC); still {
+		return fmt.Errorf("%w: MAC %s is still listed after unbind", ErrMACAuthFailed, targetMAC)
+	}
 
-	s.log.Infof("Successfully unbound MAC %s from self-service MAC-Auth", targetMAC)
+	s.log.Infof("Unbound MAC %s from self-service MAC-Auth", targetMAC)
 	return nil
 }
 
-// BindMACAuth registers a MAC address to self-service MAC-Auth (无感知认证).
+// BindMACAuth registers a MAC address to self-service MAC-Auth (无感知认证)
+// and verifies that it appears in the list.
 func (s *SelfServiceClient) BindMACAuth(targetMAC, remark string) error {
-	csrf, macs, err := s.GetMACAuthList()
+	csrf, entries, err := s.getMACAuthPage()
 	if err != nil {
 		return err
 	}
 
-	normTarget := NormalizeMAC(targetMAC)
-	for _, m := range macs {
-		if m == normTarget {
-			s.log.Infof("MAC %s is already bound in MAC-Auth", targetMAC)
-			return nil
-		}
+	if _, found := findMACAuthEntry(entries, targetMAC); found {
+		s.log.Infof("MAC %s is already bound in MAC-Auth", targetMAC)
+		return nil
 	}
 
-	bindURL := s.BaseURL + "/user/mac-auth"
-	formData := url.Values{}
-	formData.Set(csrf.FieldName, csrf.Token)
-	formData.Set("MacAuth[mac]", targetMAC)
 	if remark == "" {
 		remark = "nwafu-srun"
 	}
+	formData := url.Values{}
+	formData.Set(csrf.FieldName, csrf.Token)
+	formData.Set("MacAuth[mac]", targetMAC)
 	formData.Set("MacAuth[remark]", remark)
-
-	extraHeaders := map[string]string{
-		"Content-Type": "application/x-www-form-urlencoded",
-		"Referer":      s.BaseURL + "/user/mac-auth",
+	if err := s.postMACAuthForm(s.BaseURL+"/user/mac-auth", formData, "bind mac-auth"); err != nil {
+		return err
 	}
 
-	resp, err := doRequest(s.httpClient, context.Background(), http.MethodPost, bindURL, extraHeaders, strings.NewReader(formData.Encode()), s.log)
+	_, entries, err = s.getMACAuthPage()
 	if err != nil {
-		return wrapSelfServiceErr(err, "bind mac-auth")
+		return fmt.Errorf("verify bind: %w", err)
 	}
-	defer resp.Body.Close()
+	if _, found := findMACAuthEntry(entries, targetMAC); !found {
+		return fmt.Errorf("%w: MAC %s is not listed after bind", ErrMACAuthFailed, targetMAC)
+	}
 
-	s.log.Infof("Successfully bound MAC %s to self-service MAC-Auth", targetMAC)
+	s.log.Infof("Bound MAC %s to self-service MAC-Auth", targetMAC)
 	return nil
 }
 
@@ -595,8 +652,6 @@ func RunBypassWithBind(username, password, macFilter string, verbose bool, check
 	if macFilter != "" {
 		if unbindErr := ss.UnbindMACAuth(macFilter); unbindErr != nil {
 			ss.log.Warnf("post-bypass unbind MAC-Auth (%s): %v", macFilter, unbindErr)
-		} else {
-			ss.log.Infof("Successfully unbound MAC %s from self-service MAC-Auth", macFilter)
 		}
 	}
 

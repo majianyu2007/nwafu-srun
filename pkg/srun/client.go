@@ -522,7 +522,7 @@ func (c *Client) selfServiceLogOutInternal(quiet bool) error {
 	if err := selfSvc.SetBind(c.Bind); err != nil {
 		return err
 	}
-	if err := selfSvc.SSOLogin(c.Username); err != nil {
+	if err := selfSvc.SSOLoginWithPassword(c.Username, c.Password); err != nil {
 		return fmt.Errorf("SSO failed: %w", err)
 	}
 	kicked, err := selfSvc.KickAllByMAC(c.MAC)

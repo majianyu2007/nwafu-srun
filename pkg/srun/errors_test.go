@@ -19,6 +19,7 @@ func TestErrorsIs(t *testing.T) {
 		ErrAuthFailed,
 		ErrKickFailed,
 		ErrNoSessionsToKick,
+		ErrMACAuthFailed,
 		ErrStayOnline,
 	}
 	for _, want := range cases {

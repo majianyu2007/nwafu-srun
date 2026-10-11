@@ -29,22 +29,22 @@ const (
 )
 
 var (
-	username   string
-	password   string
-	force      bool
-	bypass     bool
-	all        bool
-	acid       string
-	verbose    bool
-	help       bool
-	configPath string
-	noConfig   bool
-	saveConfig bool
-	menu       bool
-	logoutMode string
-	bindIP     string
-	bindIface  string
-	retries    int
+	username     string
+	password     string
+	force        bool
+	bypass       bool
+	all          bool
+	acid         string
+	verbose      bool
+	help         bool
+	configPath   string
+	noConfig     bool
+	saveConfig   bool
+	menu         bool
+	logoutMode   string
+	bindIP       string
+	bindIface    string
+	retries      int
 	bindMAC      bool
 	unbindMAC    bool
 	listSessions bool
@@ -112,7 +112,14 @@ func guide(argv string) {
 	fmt.Printf("  -m, --menu       Force interactive menu mode\n")
 	fmt.Printf("  --bind-ip        Bind portal/self-service traffic to a local source IP\n")
 	fmt.Printf("  --bind-iface     Bind portal/self-service traffic to a local interface (Linux only)\n")
-	fmt.Printf("  --acid, -v, -h   See README\n")
+	fmt.Printf("  --logout-mode    Logout mode: portal (default) or selfservice\n")
+	fmt.Printf("  --acid N         Access controller ID (default 1)\n")
+	fmt.Printf("  -v, --verbose    Verbose diagnostics on stderr\n")
+	fmt.Printf("\nSelf-service (run once and exit):\n")
+	fmt.Printf("  --sessions       Print online sessions as JSON\n")
+	fmt.Printf("  --mac-auth-list  Print MAC-Auth bound MACs as JSON\n")
+	fmt.Printf("  --bind-mac       Bind this device's MAC to MAC-Auth\n")
+	fmt.Printf("  --unbind-mac     Unbind this device's MAC from MAC-Auth\n")
 	fmt.Printf("\nWith a saved config (auto_auth=true), running with no args performs auto-login.\n")
 }
 
@@ -406,6 +413,28 @@ func newClient(rt config.Runtime) *srun.Client {
 	return c
 }
 
+// newSelfServiceSession returns a self-service client that has completed SSO
+// with the client's credentials and bind options.
+func newSelfServiceSession(client *srun.Client) (*srun.SelfServiceClient, error) {
+	ss := srun.NewSelfServiceClient()
+	ss.SetVerbose(verbose)
+	if err := ss.SetBind(client.Bind); err != nil {
+		return nil, err
+	}
+	if err := ss.SSOLoginWithPassword(client.Username, client.Password); err != nil {
+		return nil, fmt.Errorf("SSO login failed: %w", err)
+	}
+	return ss, nil
+}
+
+func printJSON(v any) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		fail(exitRuntime, "encode: %v", err)
+	}
+}
+
 // runBypass kicks sessions with a random fake MAC and verifies their removal to bypass billing.
 //
 // kickAll == false (default): only sessions matching this device's MAC are
@@ -441,7 +470,7 @@ func runBypass(client *srun.Client, kickAll bool, maxRetries int) error {
 		fmt.Printf("%d session(s) online after kick:\n", len(sessions))
 		for _, sess := range sessions {
 			tag := ""
-			if client.MAC != "" && sess.MAC == client.MAC {
+			if client.MAC != "" && srun.MACEqual(sess.MAC, client.MAC) {
 				tag = "  (your device)"
 			}
 			fmt.Printf("  id=%s mac=%s%s\n", sess.ID, sess.MAC, tag)
@@ -836,15 +865,10 @@ func showConfigInfo(rt config.Runtime) {
 
 func runManageSessions(client *srun.Client) error {
 	fmt.Println("\n--- Manage Active Sessions ---")
-	ss := srun.NewSelfServiceClient()
-	ss.SetVerbose(verbose)
-	if err := ss.SetBind(client.Bind); err != nil {
-		return err
-	}
-
 	fmt.Println("Connecting to self-service portal...")
-	if err := ss.SSOLogin(client.Username); err != nil {
-		return fmt.Errorf("SSO login failed: %w", err)
+	ss, err := newSelfServiceSession(client)
+	if err != nil {
+		return err
 	}
 
 	for {
@@ -1106,46 +1130,49 @@ func main() {
 		os.Exit(exitOK)
 	}
 
+	if bindMAC && unbindMAC {
+		fail(exitUsage, "--bind-mac and --unbind-mac are mutually exclusive")
+	}
+
 	if bindMAC {
 		if !rt.HasCredentials() {
-			fail(exitUsage, "credentials required for bind-mac")
+			fail(exitUsage, "credentials required for --bind-mac")
 		}
 		client := newClient(rt)
 		if err := client.BindMACAuth("nwafu-srun"); err != nil {
-			fail(exitRuntime, "bind MAC-Auth: %v", err)
+			printErr(err)
+			os.Exit(exitRuntime)
 		}
-		fmt.Println("MAC successfully bound to MAC-Auth.")
+		fmt.Printf("MAC %s is bound to MAC-Auth.\n", client.MAC)
 		os.Exit(exitOK)
 	}
 
 	if unbindMAC {
 		if !rt.HasCredentials() {
-			fail(exitUsage, "credentials required for unbind-mac")
+			fail(exitUsage, "credentials required for --unbind-mac")
 		}
 		client := newClient(rt)
 		if err := client.UnbindMACAuth(); err != nil {
-			fail(exitRuntime, "unbind MAC-Auth: %v", err)
+			printErr(err)
+			os.Exit(exitRuntime)
 		}
-		fmt.Println("MAC successfully unbound from MAC-Auth.")
+		fmt.Printf("MAC %s is not bound to MAC-Auth.\n", client.MAC)
 		os.Exit(exitOK)
 	}
 
 	if listSessions {
 		if !rt.HasCredentials() {
-			fail(exitUsage, "credentials required to list sessions")
+			fail(exitUsage, "credentials required for --sessions")
 		}
-		client := newClient(rt)
-		ss := srun.NewSelfServiceClient()
-		ss.SetVerbose(verbose)
-		if err := ss.SetBind(client.Bind); err != nil {
-			fail(exitRuntime, "bind: %v", err)
-		}
-		if err := ss.SSOLoginWithPassword(client.Username, client.Password); err != nil {
-			fail(exitRuntime, "SSO login: %v", err)
+		ss, err := newSelfServiceSession(newClient(rt))
+		if err != nil {
+			printErr(err)
+			os.Exit(exitRuntime)
 		}
 		_, sessions, err := ss.GetSessions()
 		if err != nil {
-			fail(exitRuntime, "get sessions: %v", err)
+			printErr(err)
+			os.Exit(exitRuntime)
 		}
 		type sessionOut struct {
 			ID  string `json:"id"`
@@ -1155,36 +1182,28 @@ func main() {
 		for i, s := range sessions {
 			out[i] = sessionOut{ID: s.ID, MAC: s.MAC}
 		}
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(out); err != nil {
-			fail(exitRuntime, "encode: %v", err)
-		}
+		printJSON(out)
 		os.Exit(exitOK)
 	}
 
 	if listMACAuth {
 		if !rt.HasCredentials() {
-			fail(exitUsage, "credentials required to list mac-auth")
+			fail(exitUsage, "credentials required for --mac-auth-list")
 		}
-		client := newClient(rt)
-		ss := srun.NewSelfServiceClient()
-		ss.SetVerbose(verbose)
-		if err := ss.SetBind(client.Bind); err != nil {
-			fail(exitRuntime, "bind: %v", err)
-		}
-		if err := ss.SSOLoginWithPassword(client.Username, client.Password); err != nil {
-			fail(exitRuntime, "SSO login: %v", err)
+		ss, err := newSelfServiceSession(newClient(rt))
+		if err != nil {
+			printErr(err)
+			os.Exit(exitRuntime)
 		}
 		_, macs, err := ss.GetMACAuthList()
 		if err != nil {
-			fail(exitRuntime, "get mac-auth: %v", err)
+			printErr(err)
+			os.Exit(exitRuntime)
 		}
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(macs); err != nil {
-			fail(exitRuntime, "encode: %v", err)
+		if macs == nil {
+			macs = []string{}
 		}
+		printJSON(macs)
 		os.Exit(exitOK)
 	}
 

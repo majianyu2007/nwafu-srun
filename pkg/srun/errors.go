@@ -18,6 +18,7 @@ var (
 	ErrAuthFailed             = errors.New("auth failed")
 	ErrKickFailed             = errors.New("kick session failed")
 	ErrNoSessionsToKick       = errors.New("no online sessions to kick")
+	ErrMACAuthFailed          = errors.New("MAC-Auth update failed")
 	// ErrStayOnline signals the user chose to keep the existing online session.
 	ErrStayOnline = errors.New("stay online")
 )
@@ -38,7 +39,7 @@ func Hint(err error) string {
 	case errors.Is(err, ErrSelfServiceUnreachable):
 		return "Cannot reach the self-service portal. If you are using a TUN-mode VPN/proxy (Clash, Mihomo, v2rayN, etc.), add 'service.nwafu.edu.cn' and 'portal.nwafu.edu.cn' to its direct/bypass rules."
 	case errors.Is(err, ErrSSORedirectedToLogin):
-		return "You don't appear to be authenticated on the portal. Run login (menu 1) first, then retry bypass."
+		return "Self-service SSO was rejected. Check the password, or log in on the portal first (menu 1), then retry."
 	case errors.Is(err, ErrCSRFParseFailed):
 		return "Self-service page layout may have changed, or SSO did not complete. Log in on the portal, then retry."
 	case errors.Is(err, ErrNoMatchingSession):
@@ -49,6 +50,8 @@ func Hint(err error) string {
 		return "Check username/password and ac_id (--acid). Use -v for response details on stderr."
 	case errors.Is(err, ErrKickFailed):
 		return "Kick request failed. Retry bypass; use -v to see HTTP details."
+	case errors.Is(err, ErrMACAuthFailed):
+		return "The self-service portal did not apply the MAC-Auth change. Check the list with --mac-auth-list, or edit it on the self-service web page."
 	case errors.Is(err, ErrNoSessionsToKick):
 		return "No sessions listed on self-service. You may already be bypassed or not online."
 	default:
